@@ -18,3 +18,12 @@ by The Pixelify Sans Project Authors, licensed under the SIL Open Font License 1
 `crates/horizon-theme/icons/pixel/*.svg` are icons from
 [Pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann, under the MIT
 license (`crates/horizon-theme/icons/pixel/LICENSE-pixelarticons.txt`).
+
+## Android additions
+
+See [CREDITS.md](CREDITS.md) for the original Horizon authorship, independent
+Android adaptation, Geist/Pixelify Sans, winit, wgpu, LLVM libc++, Rust and the
+separately downloaded OpenJDK runtime. The
+[Cargo dependency inventory](third_party/dependency-licenses/README.md) preserves
+package versions, declared licenses, source links and available license/notice texts.
+Each component keeps its own license; the root MIT license does not relicense it.

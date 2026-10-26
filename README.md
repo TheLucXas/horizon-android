@@ -1,3 +1,29 @@
+# Horizon Android
+
+Independent Android fork of **[Horizon by Ludovic and its contributors](https://github.com/ludovic111/horizon)**,
+maintained by [TheLucXas](https://github.com/TheLucXas). Native Rust, ARM64 Android,
+configurable touch controls and gamepad support. [Credits and licenses](CREDITS.md).
+
+**NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.**
+
+The Android branch requires Microsoft sign-in and verified Minecraft: Java Edition
+ownership before gameplay or preparation. It downloads game inputs from official
+Mojang endpoints and an OpenJDK runtime separately on the device; game JARs,
+extracted assets and prepared game data are not bundled in the repository or APK.
+Original upstream documentation screenshots are retained as documentation.
+The Client ID is awaiting Mojang review: real sign-in and premium-server validation
+remain blocked until approval; a successful browser login alone does not unlock play.
+
+- [Android build and first-run design](tools/android/README.md)
+- [Preparation validation and limitations](docs/android-resource-preparation.md)
+- [Manual checks still to perform](docs/android-manual-checks.md)
+- [AppID review form answers](docs/android-app-review.md)
+
+The following is the original upstream README; its desktop releases, badges and
+claims refer to upstream, not to independent Android validation.
+
+---
+
 <p align="center">
   <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by 281 differential harnesses" width="100%">
 </p>
@@ -21,6 +47,15 @@
 </p>
 
 # Horizon
+
+> **Android port (development):** this checkout adds native ARM64 Android support,
+> touch controls and gamepads. See [Android build and setup](tools/android/README.md).
+> The Android startup requires a Microsoft account with verified Java Edition ownership.
+> Its first-run installer downloads game inputs from Mojang and a separately licensed
+> OpenJDK runtime for local preparation. No game JARs or prepared resources belong in
+> this repository or APK. The new installer is under validation; Microsoft/Mojang
+> application approval remains pending. The upstream desktop project and attribution
+> are preserved below.
 
 Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that reads the same worlds, follows the same rules and generates the same terrain as the Java game, and is checked against it by 281 differential harnesses. You play it through a small launcher, on the files from your own copy of Minecraft. It is free, open source and unofficial.
 

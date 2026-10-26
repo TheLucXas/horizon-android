@@ -361,6 +361,12 @@ fn client_library_artifacts(manifest: &Value) -> Result<Vec<(&str, &Value)>, Str
         .collect();
     let mut artifacts = Vec::new();
     for library in libraries {
+        // Keep this list aligned with Android's official downloader. Desktop native
+        // jars are not Android libraries; a real exporter failure remains fatal.
+        #[cfg(target_os = "android")]
+        if !android_portable_library(library) {
+            continue;
+        }
         let Some(artifact) = library.get("downloads").and_then(|d| d.get("artifact")) else {
             continue;
         };
@@ -370,6 +376,21 @@ fn client_library_artifacts(manifest: &Value) -> Result<Vec<(&str, &Value)>, Str
         }
     }
     Ok(artifacts)
+}
+
+/// Android setup downloads portable Java artifacts, not desktop native classifiers.
+/// The original manifest stays unchanged and is still checked against the lock.
+#[cfg(any(target_os = "android", test))]
+fn android_portable_library(library: &Value) -> bool {
+    !matches!(library.get("natives"), Some(Value::Object(_)))
+        && !library
+            .get("rules")
+            .and_then(Value::as_array)
+            .is_some_and(|rules| {
+                rules
+                    .iter()
+                    .any(|rule| matches!(rule.get("os"), Some(Value::Object(_))))
+            })
 }
 
 /// Netty's native transports (`io.netty:netty-transport-native-kqueue:4.2.16.Final:osx-aarch_64`,
@@ -929,6 +950,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn android_preparation_keeps_only_portable_artifacts() {
+        let parse = |s: &str| pyjson::loads(s).unwrap();
+        assert!(android_portable_library(&parse(
+            r#"{"name":"org.example:java:1"}"#
+        )));
+        assert!(android_portable_library(&parse(
+            r#"{"rules":[{"action":"allow"}]}"#
+        )));
+        assert!(!android_portable_library(&parse(
+            r#"{"natives":{"linux":"natives-linux"}}"#
+        )));
+        assert!(!android_portable_library(&parse(
+            r#"{"rules":[{"action":"allow","os":{"name":"linux"}}]}"#
+        )));
+        assert!(!android_portable_library(&parse(
+            r#"{"rules":[{"action":"disallow","os":{"name":"windows"}}]}"#
+        )));
     }
 
     #[test]

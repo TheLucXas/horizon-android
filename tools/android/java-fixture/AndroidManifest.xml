@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.horizon.javaprobe" android:versionCode="1" android:versionName="1">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <application android:label="Horizon Java setup probe" android:hasCode="true" android:allowBackup="false" android:extractNativeLibs="true">
+        <service android:name="dev.horizon.javaprobe.PreparationService" android:exported="true" android:foregroundServiceType="dataSync" android:stopWithTask="false" />
+        <activity android:name="android.app.NativeActivity" android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="horizon_java_fixture" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -105,6 +105,12 @@ impl Game<'_> {
         }
         let hardware = self.pad.read();
         self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
+        #[cfg(target_os = "android")]
+        let hardware = hardware.merge(
+            &self
+                .mobile
+                .state(self.window.as_ref().map(|w| w.inner_size())),
+        );
         let state = hardware.merge(&self.pad.injected);
         self.pad.virtual_input = self.pad.injected != PadState::default();
         for button in std::mem::take(&mut self.pad.taps) {

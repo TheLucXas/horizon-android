@@ -307,6 +307,8 @@ impl Game<'_> {
             let Some(kind) = self.res.player_type().clone() else {
                 return;
             };
+            #[cfg(target_os = "android")]
+            let kind = self.mobile_player_kind(kind);
             self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
         }
         let crouching = p.pose == Pose::Crouching;

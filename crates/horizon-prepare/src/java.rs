@@ -5,11 +5,18 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "android")]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct Jdk {
     pub javac: PathBuf,
     pub java: PathBuf,
+    #[cfg(target_os = "android")]
+    android_helper: Option<PathBuf>,
+    #[cfg(target_os = "android")]
+    cancelled: Option<Arc<AtomicBool>>,
 }
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
@@ -240,7 +247,16 @@ pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
             continue;
         }
         match javac_major(&javac) {
-            Ok(found) if i64::from(found) >= major => return Ok(Jdk { javac, java }),
+            Ok(found) if i64::from(found) >= major => {
+                return Ok(Jdk {
+                    javac,
+                    java,
+                    #[cfg(target_os = "android")]
+                    android_helper: None,
+                    #[cfg(target_os = "android")]
+                    cancelled: None,
+                })
+            }
             Ok(found) => problems.push(format!("{from} has Java {found} ({})", javac.display())),
             Err(e) => problems.push(e),
         }
@@ -263,6 +279,84 @@ pub fn classpath<'a>(paths: impl IntoIterator<Item = &'a Path>) -> String {
 }
 
 impl Jdk {
+    /// Use the APK-installed Rust launcher with a separately downloaded OpenJDK.
+    /// No writable/downloaded executable is spawned on Android. All environment
+    /// changes belong to the child, never to the game's process.
+    #[cfg(target_os = "android")]
+    pub fn android(major: i64, home: &Path, helper: &Path) -> Result<Self, String> {
+        if !home.is_absolute() || !helper.is_absolute() || !helper.is_file() {
+            return Err("Android Java runtime and installed helper must be absolute paths".into());
+        }
+        if !home.join("lib/modules").is_file() || !home.join("lib/libjli.so").is_file() {
+            return Err("Android OpenJDK installation is incomplete".into());
+        }
+        let jdk = Self {
+            javac: home.join("bin/javac"),
+            java: home.join("bin/java"),
+            android_helper: Some(helper.to_path_buf()),
+            cancelled: None,
+        };
+        let output = jdk
+            .launch_command(true)
+            .arg("-version")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("Cannot start installed Java preparation helper: {e}"))?;
+        let version = String::from_utf8_lossy(&output.stdout).into_owned()
+            + &String::from_utf8_lossy(&output.stderr);
+        let actual = version
+            .split_whitespace()
+            .skip_while(|part| *part != "javac")
+            .nth(1)
+            .and_then(|v| v.split('.').next())
+            .and_then(|v| v.parse::<i64>().ok());
+        if !output.status.success() || actual.is_none_or(|found| found < major) {
+            return Err(format!(
+                "Java preparation requires javac {major}; helper probe failed: {}",
+                version.trim()
+            ));
+        }
+        Ok(jdk)
+    }
+
+    /// Cancel and reap the current exporter promptly instead of leaving a JVM
+    /// behind when setup is cancelled or the authenticated session expires.
+    #[cfg(target_os = "android")]
+    pub fn with_cancel(mut self, cancelled: Arc<AtomicBool>) -> Self {
+        self.cancelled = Some(cancelled);
+        self
+    }
+
+    fn cancellation(&self) -> Option<&AtomicBool> {
+        #[cfg(target_os = "android")]
+        return self.cancelled.as_deref();
+        #[cfg(not(target_os = "android"))]
+        None
+    }
+
+    fn launch_command(&self, compiler: bool) -> Command {
+        #[cfg(target_os = "android")]
+        if let Some(helper) = &self.android_helper {
+            let home = self.home();
+            let lib = home.join("lib");
+            let native = helper.parent().unwrap_or_else(|| Path::new("/"));
+            // OpenJDK requires these exact leading entries or tries to re-exec
+            // its java executable, which Android must never execute from writable storage.
+            let paths = [lib.join("server"), lib.clone(), native.to_path_buf()];
+            let mut command = command(helper);
+            command
+                .arg(&home)
+                .arg(if compiler { "javac" } else { "java" })
+                .env("JAVA_HOME", &home)
+                .env("LD_LIBRARY_PATH", std::env::join_paths(paths).unwrap())
+                .env_remove("JAVA_TOOL_OPTIONS")
+                .env_remove("_JAVA_OPTIONS")
+                .env_remove("JDK_JAVA_OPTIONS");
+            return command;
+        }
+        command(if compiler { &self.javac } else { &self.java })
+    }
+
     /// The JDK's home, the folder above `bin` (what `JAVA_HOME` names).
     pub fn home(&self) -> PathBuf {
         self.javac
@@ -275,24 +369,28 @@ impl Jdk {
     /// `javac --release <major> -proc:none` with Python's `subprocess.run(..., check=True,
     /// stdout=log, stderr=STDOUT, timeout=3600)`.
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
-        let mut command = command(&self.javac);
+        let mut command = self.launch_command(true);
         command
             .args(["--release", &major.to_string(), "-proc:none"])
             .args(args);
-        run(command, log)
+        run(command, log, self.cancellation())
     }
 
     pub fn java(&self, args: &[String], cwd: Option<&Path>, log: &fs::File) -> Result<(), String> {
-        let mut command = command(&self.java);
+        let mut command = self.launch_command(false);
         command.args(args);
         if let Some(dir) = cwd {
             command.current_dir(dir);
         }
-        run(command, log)
+        run(command, log, self.cancellation())
     }
 }
 
-fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
+fn run(mut command: Command, log: &fs::File, cancelled: Option<&AtomicBool>) -> Result<(), String> {
+    let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Acquire));
+    if is_cancelled() {
+        return Err("Resource preparation cancelled".into());
+    }
     let out = log.try_clone().map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
     let program = Path::new(command.get_program())
@@ -308,6 +406,11 @@ fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
         .map_err(|e| format!("Cannot start {program}: {e}"))?;
     let start = Instant::now();
     loop {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Resource preparation cancelled".into());
+        }
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             return if status.success() {
                 Ok(())
@@ -327,6 +430,36 @@ fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn cancellation_stops_and_reaps_a_running_exporter() {
+        let log_path =
+            std::env::temp_dir().join(format!("horizon-prepare-cancel-{}.log", std::process::id()));
+        let log = fs::File::create(&log_path).unwrap();
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let signal = cancelled.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            signal.store(true, Ordering::Release);
+        });
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        let started = Instant::now();
+        let result = run(command, &log, Some(&cancelled));
+        thread.join().unwrap();
+        assert_eq!(result.unwrap_err(), "Resource preparation cancelled");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // A pre-cancelled request must not even try to spawn its executable.
+        let result = run(
+            Command::new("/nonexistent-horizon-exporter"),
+            &log,
+            Some(&cancelled),
+        );
+        assert_eq!(result.unwrap_err(), "Resource preparation cancelled");
+        drop(log);
+        fs::remove_file(log_path).unwrap();
+    }
 
     #[test]
     fn installed_jdks_prefer_the_pinned_major() {

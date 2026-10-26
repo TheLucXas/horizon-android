@@ -1115,6 +1115,24 @@ impl OptionsUi {
         self.settings_search.focused
             && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
     }
+    /// Whether a visible, editable text field owns keyboard focus.
+    pub fn text_input_focused(&self) -> bool {
+        if self.resource_error.is_some()
+            || self.selected_key.is_some()
+            || self.selected_pad_action.is_some()
+        {
+            return false;
+        }
+        match self.page() {
+            Page::Language => self.language_search.focused,
+            Page::Packs => self
+                .pack_screen
+                .as_ref()
+                .is_some_and(|p| p.search_focused()),
+            _ => self.settings_search_active(),
+        }
+    }
+
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
     }

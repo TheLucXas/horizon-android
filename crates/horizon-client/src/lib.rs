@@ -3,6 +3,9 @@
 #![forbid(unsafe_code)]
 pub mod advancements;
 pub mod ambience;
+pub mod android_account;
+#[cfg(target_os = "android")]
+pub mod android_runtime_archive;
 pub mod animate_tick;
 pub mod arrows;
 pub mod assets;
@@ -112,8 +115,10 @@ pub mod menu;
 pub mod menu_blur;
 pub mod merchant;
 pub mod mesher;
+pub mod microsoft_account;
 pub mod minimap;
 pub mod mipmap;
+pub mod mobile_input;
 pub mod mobs;
 pub mod mod_content;
 pub mod mod_list;
@@ -126,6 +131,7 @@ pub mod music;
 pub mod nbt_path;
 pub mod net;
 pub mod nether_portal;
+pub mod official_downloads;
 pub mod offline_name;
 pub mod options_file;
 pub mod options_fixes;

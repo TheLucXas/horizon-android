@@ -25,6 +25,8 @@ pub(super) struct StartupMenu {
     pub pending: Option<PendingWorldEntry>,
     pub reload_packs: bool,
     pub perf: horizon_client::telemetry::Session,
+    #[cfg(target_os = "android")]
+    pub(super) account: super::mobile_account::AccountUi,
 }
 
 impl StartupMenu {
@@ -80,6 +82,10 @@ impl StartupMenu {
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
+        #[cfg(target_os = "android")]
+        {
+            game.mobile_account = std::mem::take(&mut self.account);
+        }
         game.title = self.title.take();
         game.pending_entry = self.pending.take();
         game.cursor = self.cursor;
@@ -100,7 +106,27 @@ impl StartupMenu {
         }
     }
 
+    #[cfg(target_os = "android")]
+    pub(super) fn mobile_text_focus(&mut self) -> Option<clipboard::FieldId> {
+        if self.account.open {
+            return None;
+        }
+        if self.pending.is_some() || self.win.is_some() {
+            None
+        } else if self.options_open {
+            self.options
+                .text_input_focused()
+                .then_some(("startup.options", 0))
+        } else {
+            self.title.as_mut()?.focused_field().map(|(id, _, _)| id)
+        }
+    }
+
     fn queue_entry(&mut self, action: Action, player_name: String) {
+        #[cfg(target_os = "android")]
+        if !self.account.require_sign_in() {
+            return;
+        }
         let entry = match action {
             Action::Play { folder } => PendingWorldEntry::Local {
                 folder,
@@ -426,6 +452,30 @@ impl Loading {
         event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) -> Result<()> {
+        #[cfg(target_os = "android")]
+        let ime_retap = super::mobile_ime::observe(&event);
+        #[cfg(target_os = "android")]
+        if let WindowEvent::Focused(active) = &event {
+            self.menu.account.set_active(*active);
+        }
+        #[cfg(target_os = "android")]
+        {
+            let allowed = self.menu.account.open
+                || (!self.menu.options_open
+                    && self.menu.pending.is_none()
+                    && self.menu.win.is_none()
+                    && self.menu.title.as_ref().is_some_and(|title| {
+                        matches!(title.mode, horizon_client::title::Mode::Main)
+                    }));
+            let account_size = self.menu_size();
+            if allowed && self.menu.account.event(&event, account_size) {
+                let focus = None;
+                if let Some(window) = &self.window {
+                    super::mobile_ime::sync(window, focus, ime_retap);
+                }
+                return Ok(());
+            }
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {
@@ -560,6 +610,17 @@ impl Loading {
                     title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
                 }
             }
+            #[cfg(target_os = "android")]
+            WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                if self.menu.options_open {
+                    self.menu
+                        .options
+                        .type_text(&self.gui.as_ref().unwrap().atlas, &text);
+                } else if let Some(title) = &mut self.menu.title {
+                    title.type_text(&text);
+                    self.save_menu_address();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if event.physical_key == PhysicalKey::Code(KeyCode::F11) {
                     self.settings.fullscreen = !self.settings.fullscreen;
@@ -589,11 +650,33 @@ impl Loading {
             }
             _ => {}
         }
+        #[cfg(target_os = "android")]
+        {
+            let focus = self.menu.mobile_text_focus();
+            if let Some(window) = &self.window {
+                super::mobile_ime::sync(window, focus, ime_retap);
+            }
+        }
         Ok(())
     }
 
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
         let Some(gui) = &self.gui else { return };
+        #[cfg(target_os = "android")]
+        {
+            self.menu.account.poll();
+            if !horizon_client::auth::android_verified() {
+                self.menu.pending = None;
+                self.menu.account.open = true;
+            }
+            if self.menu.account.open {
+                let size = self.renderer.as_ref().map_or([1280, 720], |renderer| {
+                    [renderer.config.width, renderer.config.height]
+                });
+                self.menu.account.draw(batch, &gui.atlas, size);
+                return;
+            }
+        }
         if self.menu.pending.is_some() {
             horizon_client::level_loading::draw_progress(
                 batch,
@@ -623,6 +706,13 @@ impl Loading {
                 self.menu.cursor,
                 self.settings.file.bool("hideSplashTexts"),
             );
+            #[cfg(target_os = "android")]
+            if matches!(title.mode, horizon_client::title::Mode::Main) {
+                let size = self.renderer.as_ref().map_or([1280, 720], |renderer| {
+                    [renderer.config.width, renderer.config.height]
+                });
+                self.menu.account.draw(batch, &gui.atlas, size);
+            }
         }
     }
 

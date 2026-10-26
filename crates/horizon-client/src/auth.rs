@@ -5,7 +5,7 @@
 //! process's memory: it is never logged, printed or written anywhere.
 use std::{
     path::Path,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, SystemTime},
 };
 
@@ -20,6 +20,9 @@ pub struct AuthSession {
     pub uuid: u128,
     pub xuid: Option<String>,
     access_token: String,
+    /// Only the native account verifier can grant this proof. Parsed launcher files and a
+    /// player-supplied name never authorize Android gameplay or resource downloads.
+    java_verified_until: Option<SystemTime>,
 }
 impl std::fmt::Debug for AuthSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,6 +50,7 @@ impl AuthSession {
             uuid,
             xuid: None,
             access_token: access_token.to_owned(),
+            java_verified_until: None,
         }
     }
     /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
@@ -72,7 +76,18 @@ impl AuthSession {
             uuid,
             xuid: field("xuid").map(str::to_owned),
             access_token: access_token.to_owned(),
+            java_verified_until: None,
         })
+    }
+    pub(crate) fn verify_java_until(mut self, expires_at: u64) -> Self {
+        self.java_verified_until =
+            SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(expires_at));
+        self
+    }
+    /// This proof is issued only after the native account flow checks entitlements and profile.
+    pub fn java_verified(&self) -> bool {
+        self.java_verified_until
+            .is_some_and(|until| until > SystemTime::now())
     }
     /// Read the session file the launcher wrote and delete it at once. It
     /// must be fresh and, on Unix, readable by its owner only.
@@ -103,14 +118,28 @@ impl AuthSession {
     }
 }
 
-static CURRENT: OnceLock<Arc<AuthSession>> = OnceLock::new();
+static CURRENT: OnceLock<RwLock<Option<Arc<AuthSession>>>> = OnceLock::new();
 
-/// The account this game was started with (set once at start).
+/// Apply an authenticated account before opening a world or connecting. Existing network sessions
+/// retain their own Arc, so menu sign-in does not mutate an established connection's credentials.
 pub fn set_current(session: AuthSession) {
-    let _ = CURRENT.set(Arc::new(session));
+    *CURRENT.get_or_init(|| RwLock::new(None)).write().unwrap() = Some(Arc::new(session));
+}
+pub fn clear_current() {
+    *CURRENT.get_or_init(|| RwLock::new(None)).write().unwrap() = None;
 }
 pub fn current() -> Option<Arc<AuthSession>> {
-    CURRENT.get().cloned()
+    CURRENT
+        .get_or_init(|| RwLock::new(None))
+        .read()
+        .unwrap()
+        .clone()
+}
+
+/// Android never treats an offline identity or imported session file as a verified license.
+/// Checking this at every entry point also closes the gate when a token expires.
+pub fn android_verified() -> bool {
+    current().is_some_and(|session| session.java_verified())
 }
 
 /// Why joining a server through the session service failed, like the
@@ -329,6 +358,24 @@ mod tests {
         }
         let _ = mode;
         path
+    }
+
+    #[test]
+    fn android_license_proof_cannot_come_from_a_launcher_file_or_survive_expiry() {
+        let session = AuthSession::parse(r#"{"name":"Tester","uuid":"069a79f444e94726a5befca90e38aaf5","access_token":"mock-token","java_verified_until":9999999999}"#).unwrap();
+        assert!(!session.java_verified());
+        assert!(!AuthSession::new("Tester", UUID, "mock-token").java_verified());
+        assert!(!session.verify_java_until(1).java_verified());
+        let future = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60;
+        assert!(
+            AuthSession::new("Tester", UUID, "mock-token")
+                .verify_java_until(future)
+                .java_verified()
+        );
     }
 
     #[test]

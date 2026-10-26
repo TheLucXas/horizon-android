@@ -94,6 +94,22 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+#[cfg(target_os = "android")]
+mod mobile;
+#[cfg(target_os = "android")]
+mod mobile_account;
+#[cfg(target_os = "android")]
+mod mobile_bootstrap_art;
+#[cfg(target_os = "android")]
+mod mobile_hud;
+#[cfg(target_os = "android")]
+mod mobile_ime;
+#[cfg(target_os = "android")]
+pub(crate) mod mobile_locale;
+#[cfg(target_os = "android")]
+mod mobile_setup;
+#[cfg(target_os = "android")]
+mod mobile_setup_worker;
 mod mods;
 mod mount_menu;
 mod mounts;
@@ -297,6 +313,9 @@ impl Options {
     /// The name to join servers with: the one given, else the offline name kept
     /// next to options.txt (created on first use).
     fn player_name(&self) -> String {
+        if let Some(session) = horizon_client::auth::current() {
+            return session.name.clone();
+        }
         self.player_name.clone().unwrap_or_else(|| {
             std::env::current_dir().map_or_else(
                 |_| horizon_client::offline_name::generate(0),
@@ -310,12 +329,14 @@ impl Options {
             .ok_or("missing executable directory")?
             .join("resources");
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
+            resources: if cfg!(target_os = "android") {
+                std::env::current_dir()?.join("resources")
+            } else if sibling.join("horizon-resources.json").exists() {
                 sibling
             } else {
                 std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
             },
-            distance: 12,
+            distance: if cfg!(target_os = "android") { 6 } else { 12 },
             distance_override: None,
             seed: 0,
             creative: false,
@@ -1233,6 +1254,10 @@ struct Game<'a> {
     last_input: Instant,
     /// Controllers (Horizon's own).
     pad: pad::Pads,
+    #[cfg(target_os = "android")]
+    mobile: mobile::Mobile,
+    #[cfg(target_os = "android")]
+    mobile_account: mobile_account::AccountUi,
     frames: u64,
     /// Frames drawn with the player in the world, for `--world-frames`.
     world_frames: u64,
@@ -4047,6 +4072,10 @@ impl Game<'_> {
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !horizon_client::auth::android_verified() {
+            return Ok(());
+        }
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         if self.remote.is_some() {
@@ -4614,10 +4643,17 @@ impl Game<'_> {
             // so everywhere else warp after grabbing.
             #[cfg(target_os = "macos")]
             warp(window);
-            self.captured = window
-                .set_cursor_grab(CursorGrabMode::Locked)
-                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                .is_ok();
+            #[cfg(target_os = "android")]
+            {
+                self.captured = true;
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                self.captured = window
+                    .set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                    .is_ok();
+            }
             #[cfg(not(target_os = "macos"))]
             if self.captured && self.focused {
                 warp(window);
@@ -4794,6 +4830,11 @@ impl Game<'_> {
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
+        #[cfg(target_os = "android")]
+        if self.title.is_some() && self.mobile_account.open {
+            self.mobile_account.draw(&mut batch, &self.gui.atlas, size);
+            return batch;
+        }
         if self.screen == Screen::Win {
             self.draw_win_screen(&mut batch);
             return batch;
@@ -4815,6 +4856,10 @@ impl Game<'_> {
                 self.cursor,
                 self.settings.file.bool("hideSplashTexts"),
             );
+            #[cfg(target_os = "android")]
+            if matches!(title.mode, horizon_client::title::Mode::Main) {
+                self.mobile_account.draw(&mut batch, &self.gui.atlas, size);
+            }
             return batch;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
@@ -7511,6 +7556,10 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !self.mobile_account.require_sign_in() {
+            return Ok(());
+        }
         if self.defer_world_entry(PendingWorldEntry::Local {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -7555,6 +7604,10 @@ impl Game<'_> {
     }
 
     fn finish_open_world(&mut self, prepared: world_loading::PreparedWorld) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !self.mobile_account.require_sign_in() {
+            return Ok(());
+        }
         let world_loading::PreparedWorld {
             save_root,
             level,
@@ -8907,16 +8960,32 @@ impl Game<'_> {
                 if hand == Hand::Off {
                     continue;
                 }
-                let Some(arm) = self.res.player_arm().clone() else {
+                let arm = self.res.player_arm().clone();
+                #[cfg(target_os = "android")]
+                let arm = self
+                    .player_model
+                    .as_ref()
+                    .and_then(|model| {
+                        model
+                            .kind
+                            .model
+                            .children
+                            .iter()
+                            .find(|part| part.name == "right_arm")
+                    })
+                    .cloned()
+                    .or(arm);
+                let Some(arm) = arm else {
                     continue;
                 };
-                let Some(r) = self
-                    .gui
-                    .atlas
-                    .sprites
-                    .get("entity/player/wide/steve")
-                    .copied()
-                else {
+                let skin = "entity/player/wide/steve";
+                #[cfg(target_os = "android")]
+                let skin = self
+                    .player_model
+                    .as_ref()
+                    .and_then(|model| model.skin.as_deref())
+                    .unwrap_or(skin);
+                let Some(r) = self.gui.atlas.sprites.get(skin).copied() else {
                     continue;
                 };
                 // renderPlayerArm (right arm)
@@ -9966,6 +10035,8 @@ impl Game<'_> {
             Vec::new()
         };
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
+        #[cfg(target_os = "android")]
+        self.draw_mobile(&mut hud);
         // Map textures changed since the last drawn frame (game/maps.rs).
         hud.patches.append(&mut self.map_patches);
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
@@ -10710,7 +10781,18 @@ impl Game<'_> {
 }
 impl ApplicationHandler for Game<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        self.mobile_account.set_active(true);
         if self.window.is_some() {
+            #[cfg(target_os = "android")]
+            if let Some(renderer) = &mut self.renderer {
+                if let Err(e) = renderer.recreate_surface() {
+                    self.error = Some(e);
+                    event_loop.exit();
+                }
+                renderer.suspended = false;
+            }
+            self.previous = Instant::now();
             return;
         }
         // The Window constructor: created fullscreen when options.txt says so.
@@ -10753,8 +10835,44 @@ impl ApplicationHandler for Game<'_> {
         self.apply_settings();
         self.previous = Instant::now();
     }
+    #[cfg(target_os = "android")]
+    fn suspended(&mut self, _: &ActiveEventLoop) {
+        self.mobile_account.set_active(false);
+        self.mobile.clear();
+        self.focused = false;
+        if self.screen == Screen::Playing && self.title.is_none() {
+            self.screen = Screen::Paused;
+            self.pause_menu = true;
+            self.capture(false);
+        }
+        self.pause = self.pauses_game();
+        if let Some(server) = &self.integrated {
+            server.set_paused(self.pause);
+        }
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+            renderer.suspended = true;
+        }
+    }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        #[cfg(target_os = "android")]
+        let event = mobile::translate_event(event);
+        #[cfg(target_os = "android")]
+        if let WindowEvent::Focused(active) = &event {
+            self.mobile_account.set_active(*active);
+        }
+        #[cfg(target_os = "android")]
+        if self.mobile_window_event(event_loop, id, &event) {
+            return;
+        }
+        #[cfg(target_os = "android")]
+        let ime_retap = mobile_ime::observe(&event);
+        #[cfg(target_os = "android")]
+        if self.mobile_account_event(&event) {
+            self.mobile_sync_ime(ime_retap);
             return;
         }
         if let WindowEvent::KeyboardInput { event, .. } = &event
@@ -10865,6 +10983,10 @@ impl ApplicationHandler for Game<'_> {
         }
         let result: Result<()> = (|| {
             match event {
+                #[cfg(target_os = "android")]
+                WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                    self.mobile_ime_commit(&text);
+                }
                 WindowEvent::CloseRequested => {
                     self.begin_closing_save(true)?;
                 }
@@ -11546,12 +11668,18 @@ impl ApplicationHandler for Game<'_> {
 
             Ok(())
         })();
+        #[cfg(target_os = "android")]
+        self.mobile_sync_ime(ime_retap);
         if let Err(e) = result {
             self.error = Some(e);
             event_loop.exit();
         }
     }
-    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+    fn device_event(&mut self, _: &ActiveEventLoop, _device: DeviceId, event: DeviceEvent) {
+        #[cfg(target_os = "android")]
+        if self.mobile_device_event(_device, &event) {
+            return;
+        }
         if self.pending_save.is_none()
             && self.captured
             && self.focused
@@ -11564,6 +11692,13 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        self.mobile_sync_ime(false);
+        #[cfg(target_os = "android")]
+        if self.renderer.as_ref().is_some_and(|r| r.suspended) {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
         if self.pending_save.is_some() {
             match self.poll_closing_save() {
                 Ok(true) => event_loop.exit(),
@@ -11591,6 +11726,21 @@ impl ApplicationHandler for Game<'_> {
         self.tick_server_packs();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
+            return;
+        }
+        #[cfg(target_os = "android")]
+        self.mobile_poll();
+        #[cfg(target_os = "android")]
+        self.mobile_account_poll();
+        #[cfg(target_os = "android")]
+        if !horizon_client::auth::android_verified() && self.title.is_none() {
+            // Expiry/revocation freezes ticks immediately, then uses the ordinary save/disconnect
+            // path. An existing world is never discarded merely because sign-in needs attention.
+            if let Err(error) = self.close_world() {
+                self.error = Some(error);
+                event_loop.exit();
+            }
+            self.mobile_account.open = true;
             return;
         }
         self.poll_pads(event_loop);
@@ -11760,6 +11910,10 @@ impl<'a> Game<'a> {
             previous: now,
             last_input: now,
             pad: Default::default(),
+            #[cfg(target_os = "android")]
+            mobile: Default::default(),
+            #[cfg(target_os = "android")]
+            mobile_account: Default::default(),
             frames: 0,
             world_frames: 0,
             fps: 0.0,
@@ -12105,6 +12259,18 @@ impl Game<'_> {
     }
 
     fn resume_world_entry(&mut self) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !horizon_client::auth::android_verified() {
+            self.pending_entry = None;
+            self.mobile_account.open = true;
+            if let Some(loader) = self.world_loader.take() {
+                self.world_loader = Some(if loader.cancelled {
+                    loader
+                } else {
+                    loader.cancel()
+                });
+            }
+        }
         self.poll_world_rest()?;
         if let Some(loader) = &self.world_loader {
             if !loader.ready() {
@@ -12720,6 +12886,10 @@ fn start_game<'a>(
     settings: Option<Settings>,
     prepared: Option<GameCpuResources>,
 ) -> Result<Option<Game<'a>>> {
+    #[cfg(target_os = "android")]
+    if !horizon_client::auth::android_verified() {
+        return Err("Iniciá sesión y verificá la compra de Minecraft Java antes de jugar.".into());
+    }
     let handoff = prepared.is_some();
     let mut settings = match settings {
         Some(settings) => settings,
@@ -12859,7 +13029,7 @@ fn write_report(game: &Game<'_>) -> Result<()> {
 }
 
 fn run_event_loop(mut game: Game<'_>) -> Result<()> {
-    EventLoop::new()?.run_app(&mut game)?;
+    platform_event_loop()?.run_app(&mut game)?;
     write_report(&game)?;
     if let Some(e) = game.error.take() {
         return Err(e);
@@ -12889,7 +13059,17 @@ struct Loading {
 }
 impl Loading {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        self.menu.account.set_active(true);
         if self.window.is_some() {
+            #[cfg(target_os = "android")]
+            if let Some(renderer) = &mut self.renderer {
+                if let Err(e) = renderer.recreate_surface() {
+                    self.error = Some(e);
+                    event_loop.exit();
+                }
+                renderer.suspended = false;
+            }
             return;
         }
         // The Window constructor: created fullscreen when options.txt says so.
@@ -12947,6 +13127,40 @@ impl Loading {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        #[cfg(target_os = "android")]
+        let event = mobile::translate_event(event);
+        #[cfg(target_os = "android")]
+        if let WindowEvent::Touch(touch) = &event {
+            self.window_event(
+                event_loop,
+                id,
+                WindowEvent::CursorMoved {
+                    device_id: touch.device_id,
+                    position: touch.location,
+                },
+            );
+            if matches!(
+                touch.phase,
+                winit::event::TouchPhase::Started
+                    | winit::event::TouchPhase::Ended
+                    | winit::event::TouchPhase::Cancelled
+            ) {
+                self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::MouseInput {
+                        device_id: touch.device_id,
+                        state: if touch.phase == winit::event::TouchPhase::Started {
+                            ElementState::Pressed
+                        } else {
+                            ElementState::Released
+                        },
+                        button: MouseButton::Left,
+                    },
+                );
+            }
+            return;
+        }
         if let Err(error) = self.menu_event(event_loop, event) {
             self.error = Some(error);
             event_loop.exit();
@@ -12987,6 +13201,11 @@ impl Loading {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        if self.renderer.as_ref().is_some_and(|r| r.suspended) {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
         if let Err(error) = self.poll_menu_resources() {
             self.error = Some(error);
             event_loop.exit();
@@ -13110,18 +13329,38 @@ impl Loading {
 /// The application: the loading screen until the resources are ready, then
 /// the game itself, on the same event loop and window.
 enum App {
+    #[cfg(target_os = "android")]
+    Setup(Box<mobile_setup::Setup>),
     Loading(Box<Loading>),
     Ready(Box<Game<'static>>),
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         match self {
+            #[cfg(target_os = "android")]
+            App::Setup(setup) => setup.resumed(event_loop),
             App::Loading(loading) => loading.resumed(event_loop),
             App::Ready(game) => game.resumed(event_loop),
         }
     }
+    #[cfg(target_os = "android")]
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        match self {
+            App::Setup(setup) => setup.suspended(),
+            App::Ready(game) => game.suspended(event_loop),
+            App::Loading(loading) => {
+                loading.menu.account.set_active(false);
+                if let Some(renderer) = &mut loading.renderer {
+                    renderer.release_surface();
+                    renderer.suspended = true;
+                }
+            }
+        }
+    }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         match self {
+            #[cfg(target_os = "android")]
+            App::Setup(setup) => setup.event(event_loop, id, event),
             App::Loading(loading) => loading.window_event(event_loop, id, event),
             App::Ready(game) => game.window_event(event_loop, id, event),
         }
@@ -13132,13 +13371,38 @@ impl ApplicationHandler for App {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        {
+            let suspended = match self {
+                App::Setup(setup) => setup.renderer.as_ref().is_some_and(|r| r.suspended),
+                App::Loading(loading) => loading.renderer.as_ref().is_some_and(|r| r.suspended),
+                App::Ready(game) => game.renderer.as_ref().is_some_and(|r| r.suspended),
+            };
+            if suspended {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
+            }
+        }
+
         enum Step {
+            #[cfg(target_os = "android")]
+            Loading(Box<Loading>),
             Waiting,
             Ready(Box<Game<'static>>),
             Done,
             Failed(Box<dyn std::error::Error>),
         }
         let step = match self {
+            #[cfg(target_os = "android")]
+            App::Setup(setup) => match setup.poll(event_loop) {
+                Ok(Some(loading)) => Step::Loading(Box::new(loading)),
+                Ok(None) => Step::Waiting,
+                Err(e) => {
+                    setup.error = Some(e);
+                    event_loop.exit();
+                    return;
+                }
+            },
             App::Ready(game) => {
                 game.about_to_wait(event_loop);
                 return;
@@ -13165,6 +13429,8 @@ impl ApplicationHandler for App {
             }
         };
         match step {
+            #[cfg(target_os = "android")]
+            Step::Loading(loading) => *self = App::Loading(loading),
             Step::Waiting => {}
             Step::Ready(game) => *self = App::Ready(game),
             Step::Done => event_loop.exit(),
@@ -13186,6 +13452,32 @@ impl ApplicationHandler for App {
 /// The ordinary launch: load the resources on a worker while the window shows
 /// the loading screen, then swap in the game on the main thread.
 fn run_loading(
+    options: Options,
+    settings: Settings,
+    vanilla_root: PathBuf,
+    pack_error: Option<String>,
+    started: Instant,
+) -> Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (vanilla_root, pack_error, started);
+        let mut app = App::Setup(Box::new(mobile_setup::Setup::new(options, settings)?));
+        platform_event_loop()?.run_app(&mut app)?;
+        match app {
+            App::Setup(mut setup) => setup.error.take().map_or(Ok(()), Err),
+            App::Loading(mut loading) => loading.error.take().map_or(Ok(()), Err),
+            App::Ready(mut game) => {
+                write_report(&game)?;
+                game.error.take().map_or(Ok(()), Err)
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    run_loading_desktop(options, settings, vanilla_root, pack_error, started)
+}
+
+#[cfg(not(target_os = "android"))]
+fn run_loading_desktop(
     options: Options,
     settings: Settings,
     vanilla_root: PathBuf,
@@ -13216,7 +13508,7 @@ fn run_loading(
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
-    EventLoop::new()?.run_app(&mut app)?;
+    platform_event_loop()?.run_app(&mut app)?;
     match app {
         App::Ready(mut game) => {
             write_report(&game)?;
@@ -13233,10 +13525,26 @@ fn run_loading(
     Ok(())
 }
 
+fn platform_event_loop() -> Result<EventLoop<()>> {
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        Ok(EventLoop::builder()
+            .with_android_app(crate::android_app())
+            .build()?)
+    }
+    #[cfg(not(target_os = "android"))]
+    Ok(EventLoop::new()?)
+}
+
 pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };
+    #[cfg(target_os = "android")]
+    if options.dedicated.is_some() {
+        return Err("El modo servidor dedicado no está disponible en Horizon Android.".into());
+    }
     if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
         return Ok(());
     }

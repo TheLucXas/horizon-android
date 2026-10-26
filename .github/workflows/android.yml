@@ -1,0 +1,34 @@
+name: Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [android]
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: android-actions/setup-android@v3
+      - name: Android tools
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;30.0.16248370'
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build native game
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.16248370
+        run: cargo ndk -t arm64-v8a -p 28 build -p horizon-android --release --locked
+      - name: Build resource preparation helper
+        run: |
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
+          cargo build --manifest-path tools/android/java-helper/Cargo.toml --target aarch64-linux-android --release --locked
+      - name: Package development APK
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/android.keystore" -storepass android -keypass android -alias androiddebugkey -dname 'CN=Horizon Android Development' -keyalg RSA -validity 10000
+          python3 tools/android/package.py --keystore "$RUNNER_TEMP/android.keystore" --java-helper tools/android/java-helper/target/aarch64-linux-android/release/horizon-android-java-helper --cxx-runtime "$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-android-arm64
+          path: dist/horizon-android.apk

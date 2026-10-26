@@ -31,3 +31,21 @@
 /.horizon-cache/
 /crash-reports/
 /debug/
+
+/*check.log
+/android-build.log
+/fmt.log
+/rust-src-install.log
+/horizon-touch.json
+
+# Android downloads, build/signing outputs and account state are never published.
+/versions/
+/libraries/
+/prepared/
+/installation/
+*.apk
+*.aab
+*.keystore
+*.jks
+**/microsoft-account/
+**/java-helper/target/

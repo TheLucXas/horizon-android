@@ -1,0 +1,3 @@
+libc++_shared.so is supplied by the Android NDK.
+License: Apache-2.0 WITH LLVM-exception (see libcxx-LICENSE.txt).
+Corresponding source and build documentation: https://android.googlesource.com/toolchain/llvm-project/ and https://android.googlesource.com/platform/ndk/

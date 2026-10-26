@@ -1,0 +1,17 @@
+[package]
+name = "horizon-java-fixture"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+jni = "0.21"
+horizon-prepare = { path = "../../../crates/horizon-prepare" }
+sha2 = "0.10"
+
+[workspace]

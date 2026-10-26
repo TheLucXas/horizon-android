@@ -1,0 +1,99 @@
+# Horizon Android (development)
+
+The Android target shares the original Rust game, simulation and wgpu Vulkan renderer.
+It uses NativeActivity with no Java game wrapper. API 28+, ARM64 and a suitable Vulkan
+GPU are required. Performance and hardware compatibility must be tested on each device.
+
+## Build on Linux/macOS with the Android SDK and NDK
+
+Install Rust 1.90+, the `aarch64-linux-android` target and `cargo-ndk`. Then:
+
+```sh
+cargo ndk -t arm64-v8a -p 28 build -p horizon-android --release
+keytool -genkeypair -keystore android-debug.keystore -storepass android -keypass android \
+  -alias androiddebugkey -dname 'CN=Horizon Android Development' -keyalg RSA -validity 10000
+CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" \
+  cargo build --manifest-path tools/android/java-helper/Cargo.toml --target aarch64-linux-android --release --locked
+python3 tools/android/package.py --sdk "$ANDROID_HOME" --keystore android-debug.keystore \
+  --java-helper tools/android/java-helper/target/aarch64-linux-android/release/horizon-android-java-helper \
+  --cxx-runtime "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+```
+
+Keep this keystore private and reuse it for local updates. This is a development signing
+key, not a publisher's release identity. The APK contains no Mojang resources.
+
+## First-run installation
+
+The Android startup uses only original geometric widgets and the bundled OFL-licensed
+Geist font until the account has been verified. Microsoft sign-in, Java Edition
+entitlements and the matching official profile are mandatory before downloading
+Minecraft inputs or entering any local world or server. Cached accounts are checked
+online on startup; failed verification does not fall back to a guest identity.
+This policy is specific to this Android port. Desktop behavior is unchanged.
+
+The installer downloads the pinned 26.3 version JSON, client/server JARs, portable
+Java libraries and indexed assets from official Mojang endpoints. Each file is checked
+against its published size and SHA-1 before atomic cache publication. It then downloads
+OpenJDK25 for Android **separately**, checks the pinned SHA-256, preserves its license
+files and runs the original preparation tools locally. The APK includes a small Rust
+JVM launcher and NDK libc++, with their notices; it contains neither OpenJDK's runtime
+nor Mojang JARs, textures, sounds or prepared tables. See
+[the preparation architecture and validation limits](../../docs/android-resource-preparation.md).
+
+Installation inputs, generated tables and account tokens remain in the application's
+private internal storage. Worlds, options and touch settings retain their existing
+Android external app-data location. A failed/cancelled setup keeps verified downloads
+for retry and never enters the game with an incomplete installation. Expired or revoked
+ownership proof stops preparation and blocks gameplay; leaving a world uses the normal
+save/disconnect path.
+
+The first-run path is under validation. Client ID approval by Mojang is still pending;
+no completed real sign-in/premium-server test is claimed before that approval.
+
+## Controls
+
+Two sticks move/look; buttons jump, sneak, mine, use, open inventory and pause. Bumpers
+cycle hotbar slots. Touch menus directly. Tap the small pencil during play, drag any control, adjust
+size/opacity, then LISTO to save. Circular icon buttons show press feedback; the
+look stick appears while touched or when editing. Advanced settings are in `horizon-touch.json`, including
+look sensitivity and automatic hiding with a controller. Touch the screen to show controls
+again. Existing controller bindings/deadzones/menu settings are shared with desktop Horizon.
+
+The vendored winit 0.30.13 has a small Android-only input patch in
+`src/platform_impl/android/mod.rs`: joystick axes and pad keys become DeviceEvents instead
+of touches. Upstream winit's license is retained in `third_party/winit/LICENSE`.
+
+## Keyboard and Microsoft account
+
+Android opens the software keyboard when an editable field receives focus, hides it
+when leaving the field/screen, and can reopen it after Back by tapping the field.
+NativeActivity's basic input path still needs validation with each installed IME;
+advanced composition is not claimed as universally supported.
+
+The title's Minecraft-style **Sign in / Iniciar sesión** button follows the selected
+Minecraft language and uses the port owner's registered public
+Microsoft application ID, configured internally. Players do not enter GUIDs or
+register individual Azure apps. Pressing sign-in requests a linking code, copies
+that short code to Android's clipboard when possible, and opens Microsoft's official
+verification page in the system browser. Complete the page and return to Horizon.
+The page may require pasting the code before entering the Microsoft account.
+The pending request survives temporary connection failures and pauses network polling
+while the app is inactive; returning resumes it until the linking code expires.
+
+Credentials are entered only on Microsoft. Tokens remain in private internal
+storage. Minecraft may require developer app approval independently of enabling
+public client flows in Entra. See [Microsoft account setup](../../docs/microsoft-account.md).
+Real sign-in and skin rendering require an account and cannot be verified by mocked
+backend tests alone.
+
+### Original first-run interface (0.5.1)
+
+The pre-download account panel uses a locally generated Pixelify Sans bitmap atlas
+and geometric widgets, retaining the font's OFL license. It does not require any
+Minecraft resource. Whole-pixel glyph metrics and binary coverage avoid scaling
+antialiased TTF text into a blurred first-run screen. The saved Minecraft language
+has priority; only a first launch without `lang:` reads Android's default locale.
+The bootstrap panel includes Spanish, English and Portuguese strings, with English
+fallback for other languages. Once resources are prepared the game continues to use
+its normal language configuration. The mandatory sign-in panel has no previous menu;
+its close action finishes the Android task instead of reopening the same panel.

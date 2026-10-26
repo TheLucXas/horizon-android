@@ -410,6 +410,17 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
         &artifacts::minecraft_dir(options.minecraft_dir.as_deref()).join("runtime"),
     ));
     let jdk = java::find(lock.java_major, &homes)?;
+    prepare_with_jdk(options, jdk, log)
+}
+
+/// Prepare with an explicit JDK bridge (Android's APK-installed helper). Ownership
+/// checks and official downloads must have completed before calling this function.
+/// This still executes every original exporter; downloaded jars alone are not
+/// treated as prepared resources.
+pub fn prepare_with_jdk(options: &Options, jdk: java::Jdk, log: Log) -> Result<PathBuf, String> {
+    let root = &std::path::absolute(&options.root)
+        .map_err(|e| format!("{}: {e}", options.root.display()))?;
+    let lock = artifacts::Lock::read(root)?;
     if options.import && !artifacts::reuse_imported(root, log)? {
         artifacts::import(
             root,

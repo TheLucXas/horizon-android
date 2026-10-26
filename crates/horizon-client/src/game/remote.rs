@@ -257,6 +257,10 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !self.mobile_account.require_sign_in() {
+            return Ok(());
+        }
         if self.defer_world_entry(super::PendingWorldEntry::Server {
             address: address.to_owned(),
             name: name.to_owned(),
@@ -293,6 +297,10 @@ impl Game<'_> {
         name: &str,
         local: Option<horizon_protocol::connection::Pipe>,
     ) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if !horizon_client::auth::android_verified() {
+            return Err("Iniciá sesión y verificá Minecraft Java antes de conectarte.".into());
+        }
         self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
@@ -2818,6 +2826,18 @@ impl Game<'_> {
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
     fn update_remote_skins(&mut self) {
+        #[cfg(target_os = "android")]
+        if let (Some(remote), Some(account)) = (&mut self.remote, &self.mobile_account.profile) {
+            remote.skin_textures.insert(
+                remote.profile,
+                horizon_client::skins::Textures {
+                    skin: account.skin_url(),
+                    cape: account.cape_url(),
+                    elytra: account.cape_url(),
+                    signed: false,
+                },
+            );
+        }
         let Some(r) = self.remote.as_ref() else {
             return;
         };
@@ -2905,7 +2925,7 @@ impl Game<'_> {
         self.skin_slots.push((location, slot));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
-    fn show_skin(&mut self, location: &str) -> bool {
+    pub(super) fn show_skin(&mut self, location: &str) -> bool {
         let Some(i) = self.skin_slots.iter().position(|e| e.0 == location) else {
             return false;
         };

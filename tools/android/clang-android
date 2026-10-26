@@ -1,0 +1,4 @@
+#!/bin/sh
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ndk_root="$project_root/.local/android-ndk/toolchains/llvm/prebuilt/linux-x86_64"
+exec clang "$@" --target=aarch64-linux-android28 --sysroot="$ndk_root/sysroot" -resource-dir="$ndk_root/lib/clang/21" -fuse-ld=lld

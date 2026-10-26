@@ -185,3 +185,44 @@ Microsoft, Xbox and Minecraft endpoints, and the keychain abstraction with an in
 - (d) Game: chat signing (profile keys, chat session, signed messages and commands).
 
 Each part ships on its own: online mode needs a session, which only (c) creates.
+
+## Android native account screen
+
+The Android port reuses the launcher's native device-code token chain in
+`horizon-client/src/microsoft_account.rs`. `android_account::AccountManager` runs the requests on a
+worker and exposes starting, verification-code, refreshing, success, cancellation and error states.
+Credentials are entered only on Microsoft's official verification page in the system browser. The
+public verification code is displayed in Horizon; the device code, access tokens and refresh token
+are never displayed or logged. A cancelled worker cannot commit a late result.
+
+The Android build incorporates the port owner's **public Application (client) ID** internally in
+`game/mobile_account.rs`. Players see a sign-in button, not a developer configuration form, and
+never need individual Azure app registrations. The sign-in press requests a device code and opens
+the official verification page once it arrives. The short linking code is copied to Android's
+clipboard if available and displayed in the account panel; private device/access/refresh tokens
+never reach the browser URI or clipboard. Opening the application or refreshing a cached session
+does not initiate a new browser sign-in. Cancellation prevents a delayed browser launch.
+
+This app identity does not bypass Microsoft's public-client registration or Minecraft Services
+application approval requirements above. Enabling public client flows alone is not proof that
+Minecraft Services has approved the application.
+
+Android credentials are stored only under the path returned by
+`AndroidApp::internal_data_path()`, in `microsoft-account/session.json`, with a 0700 directory and
+0600 files. Writes use a same-directory atomic replacement. The Android sandbox protects these
+files; the APK disables backup to keep them out of Android cloud/device backup. This is separate
+from desktop keychain storage and does **not** claim hardware-backed encryption. No credentials
+are written to `external_data_path()`, the resource import folder, shared storage, command-line
+arguments, or logs. If private storage fails, the signed-in session can still run in memory and the
+screen reports that it was not saved. Signing out cancels outstanding work and deletes the saved
+session. Startup restores/refreshes a valid session before applying its identity.
+
+The authenticated Minecraft profile provides the real name, UUID, active skin and cape. Skin URLs
+are restricted to `textures.minecraft.net/texture/…` and upgraded to HTTPS. The game uses its
+existing skin downloader and renderer; the account's name and authenticated session are applied
+before connecting, without changing identity in a running world. End-to-end sign-in needs the
+registered/approved client ID and the player's own browser consent; mock endpoint tests alone do
+not demonstrate a working real account sign-in.
+
+Protocol reference checked for the Android integration:
+[Microsoft's device authorization documentation](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).

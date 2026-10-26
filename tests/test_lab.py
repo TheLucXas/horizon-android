@@ -170,14 +170,17 @@ class ArtifactTests(unittest.TestCase):
 
 class PublicationTests(unittest.TestCase):
     def test_private_paths_rejected(self):
-        for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java"]:
+        for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java",
+                     "dist/game.apk", "signing/debug.keystore", "signing/release.jks",
+                     "installation/resources/data.json", "private/microsoft-account/session.json"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
         for path in ["tools/lab.py", "crates/horizon-core/src/lib.rs", "Cargo.lock", "docs/analysis.md",
                      "mods/horizon/src/main/java/dev/horizonlab/HorizonLab.java",
                      "mods/horizon-lab/src/main/java/dev/horizonlab/HorizonLab.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
         self.assertTrue(check_public_tree.prohibited("mods/horizon/src/main/java/net/minecraft/Client.java"))
-        for path in ["tools/JfrSummary.java", "tests/java/JfrFixture.java"]:
+        for path in ["tools/JfrSummary.java", "tests/java/JfrFixture.java",
+                     "tools/android/java-fixture/java/dev/horizon/javaprobe/PreparationService.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
         for path in ["tools/Minecraft.java", "tests/java/Client.java", ".local/tools/JfrSummary.java"]:
             self.assertTrue(check_public_tree.prohibited(path), path)

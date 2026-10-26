@@ -1,6 +1,6 @@
 [workspace]
-exclude = ["launcher", "crates/horizon-telemetry-server", "third_party/wgpu-hal"]
-members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-threads", "crates/horizon-world", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-shaders", "crates/horizon-release-sign", "crates/horizon-mod-sdk/examples/coords-hud", "xtask"]
+exclude = ["launcher", "crates/horizon-telemetry-server", "third_party/wgpu-hal", "third_party/winit"]
+members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-threads", "crates/horizon-world", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-shaders", "crates/horizon-release-sign", "crates/horizon-mod-sdk/examples/coords-hud", "xtask", "crates/horizon-android"]
 resolver = "2"
 
 [workspace.package]
@@ -22,6 +22,7 @@ large_enum_variant = "allow"
 # UHD 620/630) crashes on it with an access violation (#746). Drop this and the
 # folder once a wgpu release has the fix.
 [patch.crates-io]
+winit = { path = "third_party/winit" }
 wgpu-hal = { path = "third_party/wgpu-hal" }
 
 # Line tables keep file:line in backtraces; full debug info made every
