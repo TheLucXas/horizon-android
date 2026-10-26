@@ -97,3 +97,11 @@ The bootstrap panel includes Spanish, English and Portuguese strings, with Engli
 fallback for other languages. Once resources are prepared the game continues to use
 its normal language configuration. The mandatory sign-in panel has no previous menu;
 its close action finishes the Android task instead of reopening the same panel.
+
+### Manual GitHub builds
+
+The `Android APK` workflow runs only through `workflow_dispatch`; pushes do not
+start an Android build. Use GitHub Actions → Android APK → Run workflow, selecting
+the `android` branch, or `gh workflow run android.yml --ref android`.
+Successful runs provide the `horizon-android-arm64` APK artifact.
+The workflow uses a standard `ubuntu-latest` GitHub-hosted runner in this public repository.

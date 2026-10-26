@@ -1,8 +1,6 @@
 name: Android APK
 on:
   workflow_dispatch:
-  push:
-    branches: [android]
 jobs:
   apk:
     runs-on: ubuntu-latest
