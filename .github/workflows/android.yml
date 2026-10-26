@@ -12,6 +12,10 @@ jobs:
         with:
           targets: aarch64-linux-android
       - uses: android-actions/setup-android@v3
+        with:
+          # The retired SDK "tools" package is no longer in Google's repository.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Android tools
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;30.0.16248370'
       - name: Install cargo-ndk
