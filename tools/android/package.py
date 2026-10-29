@@ -20,8 +20,11 @@ a = p.parse_args()
 if not a.sdk:
     p.error('--sdk or ANDROID_HOME is required')
 sdk = Path(a.sdk)
-tools = a.build_tools or sorted((sdk/'build-tools').iterdir())[-1]
-platform = sorted((sdk/'platforms').glob('android-*/android.jar'))[-1]
+# Match the workflow's installed stable SDK; runners may also contain preview SDKs.
+tools = a.build_tools or sdk/'build-tools/35.0.0'
+platform = sdk/'platforms/android-35/android.jar'
+if not platform.is_file():
+    p.error('Android SDK platform 35 is required (sdkmanager platforms;android-35)')
 out = a.out.resolve()
 out.parent.mkdir(parents=True, exist_ok=True)
 unsigned = out.with_name(out.stem+'-unsigned.apk')
