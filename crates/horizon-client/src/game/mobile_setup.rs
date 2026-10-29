@@ -19,6 +19,7 @@ pub(super) struct Setup {
     prepared: Option<PathBuf>,
     failure: Option<String>,
     cursor: (f32, f32),
+    active: bool,
     pub error: Option<Box<dyn std::error::Error>>,
 }
 impl Drop for Setup {
@@ -60,10 +61,12 @@ impl Setup {
             prepared: None,
             failure: None,
             cursor: (0., 0.),
+            active: false,
             error: None,
         })
     }
     pub fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.active = true;
         self.account.set_active(true);
         let result = (|| -> Result<()> {
             if let Some(renderer) = &mut self.renderer {
@@ -94,6 +97,7 @@ impl Setup {
         }
     }
     pub fn suspended(&mut self) {
+        self.active = false;
         self.account.set_active(false);
         if let Some(renderer) = &mut self.renderer {
             renderer.release_surface();
@@ -141,6 +145,7 @@ impl Setup {
             return;
         }
         if let WindowEvent::Focused(active) = &event {
+            self.active = *active;
             self.account.set_active(*active);
         }
         if let WindowEvent::CursorMoved { position, .. } = &event {
@@ -203,8 +208,20 @@ impl Setup {
             }
         } else {
             self.account.open = false;
-            if self.worker.is_none() && self.prepared.is_none() && self.failure.is_none() {
+            if self.active
+                && self.worker.is_none()
+                && self.prepared.is_none()
+                && self.failure.is_none()
+            {
                 self.cancel = Arc::new(AtomicBool::new(false));
+                let service = match crate::AndroidInstallation::start(self.cancel.clone()) {
+                    Ok(service) => service,
+                    Err(error) => {
+                        log::warn!("Android installer: {error}");
+                        self.failure = Some(error);
+                        return Ok(None);
+                    }
+                };
                 let (tx, rx) = mpsc::channel();
                 let (internal, helper, cancel, progress) = (
                     self.internal.clone(),
@@ -226,6 +243,7 @@ impl Setup {
                                     .update(event, Instant::now());
                             },
                         );
+                        drop(service);
                         let _ = tx.send(result);
                     })?;
                 self.worker = Some(rx);

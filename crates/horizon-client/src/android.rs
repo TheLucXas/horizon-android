@@ -28,6 +28,101 @@ pub(crate) fn android_finish() -> Result<(), String> {
     result.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Own the foreground service for exactly one authenticated installation. Started while visible;
+/// stopped from the worker even when the Activity's event loop is suspended.
+#[cfg(target_os = "android")]
+static INSTALL_CANCEL: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "android")]
+pub(crate) struct AndroidInstallation {
+    vm: jni::JavaVM,
+    context: jni::objects::GlobalRef,
+    intent: jni::objects::GlobalRef,
+}
+#[cfg(target_os = "android")]
+impl AndroidInstallation {
+    pub(crate) fn start(
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Self, String> {
+        use jni::objects::{JObject, JValue};
+        let app = android_app();
+        // SAFETY: AndroidApp owns the live VM and Activity during this call.
+        let vm =
+            unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.map_err(|e| e.to_string())?;
+        let result = {
+            let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+            let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+            let result = env.with_local_frame(12, |env| -> jni::errors::Result<_> {
+                let context = env
+                    .call_method(
+                        &activity,
+                        "getApplicationContext",
+                        "()Landroid/content/Context;",
+                        &[],
+                    )?
+                    .l()?;
+                let intent = env.new_object("android/content/Intent", "()V", &[])?;
+                let package = JObject::from(env.new_string("dev.horizon.android")?);
+                let name =
+                    JObject::from(env.new_string("dev.horizon.android.InstallationService")?);
+                env.call_method(
+                    &intent,
+                    "setClassName",
+                    "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+                    &[JValue::Object(&package), JValue::Object(&name)],
+                )?;
+                env.call_method(
+                    &context,
+                    "startForegroundService",
+                    "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+                    &[JValue::Object(&intent)],
+                )?;
+                Ok((env.new_global_ref(context)?, env.new_global_ref(intent)?))
+            });
+            if result.is_err() {
+                let _ = env.exception_clear();
+            }
+            result
+        };
+        let (context, intent) =
+            result.map_err(|e| format!("Could not start installation service: {e}"))?;
+        *INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel);
+        Ok(Self {
+            vm,
+            context,
+            intent,
+        })
+    }
+}
+#[cfg(target_os = "android")]
+impl Drop for AndroidInstallation {
+    fn drop(&mut self) {
+        if let Ok(mut env) = self.vm.attach_current_thread() {
+            let result = env.call_method(
+                self.context.as_obj(),
+                "stopService",
+                "(Landroid/content/Intent;)Z",
+                &[jni::objects::JValue::Object(self.intent.as_obj())],
+            );
+            if result.is_err() {
+                let _ = env.exception_clear();
+            }
+        }
+        *INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_horizon_android_InstallationService_cancelInstallation(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    if let Some(cancel) = &*INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Read Android's locale only for a first launch without a saved Minecraft language.
 #[cfg(target_os = "android")]
 pub(crate) fn android_locale() -> Option<String> {

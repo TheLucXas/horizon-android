@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,17 @@ aligned = out.with_name(out.stem+'-aligned.apk')
 resources = out.with_name(out.stem+'-resources.zip')
 subprocess.run([str(tools/'aapt2'), 'compile', '--dir', str(ROOT/'packaging/android/res'), '-o', str(resources)], check=True)
 subprocess.run([str(tools/'aapt2'), 'link', '-I', str(platform), '--manifest', str(ROOT/'packaging/android/AndroidManifest.xml'), '-R', str(resources), '-o', str(unsigned)], check=True)
+# A tiny framework Service keeps the native installer alive when the Activity is hidden.
+# Compile with the SDK only; no AndroidX, downloaded runtime or game classes are bundled.
+with tempfile.TemporaryDirectory(prefix='horizon-service-') as temporary:
+    classes = Path(temporary)
+    subprocess.run(['javac', '-source', '8', '-target', '8', '-classpath', str(platform),
+                    '-d', str(classes), str(ROOT/'packaging/android/java/dev/horizon/android/InstallationService.java')], check=True)
+    subprocess.run(['java', '-cp', str(sdk/'build-tools/35.0.0/lib/d8.jar'),
+                    'com.android.tools.r8.D8', '--min-api', '28', '--lib', str(platform),
+                    '--output', str(classes), *map(str, classes.rglob('*.class'))], check=True)
+    with zipfile.ZipFile(unsigned, 'a', compression=zipfile.ZIP_DEFLATED) as z:
+        z.write(classes/'classes.dex', 'classes.dex')
 with zipfile.ZipFile(unsigned, 'a', compression=zipfile.ZIP_DEFLATED) as z:
     z.write(a.library, 'lib/arm64-v8a/libhorizon_android.so')
     z.write(a.java_helper, 'lib/arm64-v8a/libhorizon_java.so')

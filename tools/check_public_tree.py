@@ -9,9 +9,10 @@ import sys
 PRIVATE_ROOTS = {".local", "decompiled", "minecraft", "assets", "run", "logs",
                  "versions", "libraries", "prepared", "installation", "dist", "target"}
 PRIVATE_EXTENSIONS = {".jar", ".class", ".jfr", ".hprof", ".java", ".apk", ".aab", ".keystore", ".jks"}
-ORIGINAL_JDK_TOOLS = {
+ORIGINAL_JAVA_SOURCES = {
     "tools/JfrSummary.java", "tests/java/JfrFixture.java",
-    # Original Android OS bridge for an isolated development test, never the game APK.
+    # Original Android OS bridges (not recovered/decompiled game code).
+    "packaging/android/java/dev/horizon/android/InstallationService.java",
     "tools/android/java-fixture/java/dev/horizon/javaprobe/PreparationService.java",
 }
 
@@ -20,8 +21,8 @@ def prohibited(path):
     parsed = PurePosixPath(path)
     if "microsoft-account" in parsed.parts:
         return True
-    # Original JDK-only tools are an exact allowlist; recovered game Java stays private.
-    if path in ORIGINAL_JDK_TOOLS:
+    # Exact original-source allowlist; all recovered game Java remains private.
+    if path in ORIGINAL_JAVA_SOURCES:
         return False
     # Original Horizon mod sources may also be tracked.
     if parsed.suffix == ".java" and path.startswith(("mods/horizon/src/", "mods/horizon-lab/src/")):

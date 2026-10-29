@@ -47,8 +47,8 @@ for retry and never enters the game with an incomplete installation. Expired or 
 ownership proof stops preparation and blocks gameplay; leaving a world uses the normal
 save/disconnect path.
 
-The first-run path is under validation. Client ID approval by Mojang is still pending;
-no completed real sign-in/premium-server test is claimed before that approval.
+The application ID has received Mojang approval, and real sign-in has reached installation.
+End-to-end installation, gameplay and premium-server compatibility remain under validation.
 
 ## Controls
 
@@ -126,3 +126,23 @@ decimal units (1 GB = 1,000 MB). A rolling throughput estimate supplies the ETA 
 the current download group, with calculating/unknown states during warm-up,
 stalls or missing Content-Length. Preparation/extraction stages have no download
 speed or invented ETA. Verified cached files are reused on retry/update.
+
+### Concurrent and background installation (0.5.4)
+
+Indexed resource objects now download with up to eight concurrent requests through one
+shared HTTP agent. The stage total stays fixed; progress sums received bytes across workers
+and excludes cache hits from speed. Each object still needs the declared size and SHA-1
+before publication. Transport failures retry with bounded backoff; failed integrity checks
+retain the shorter retry limit. Completed verified files are reused after interruption.
+
+A small Android framework Service bridge (compiled with the SDK, without AndroidX) owns
+a `dataSync` foreground notification and a partial wake lock during the authenticated Rust
+installer. It starts while the Activity is visible and stops on success, failure or cancellation,
+even if the Activity is suspended. The installation itself remains Rust. The service does not
+restart unattended or bypass account verification. Android 15's six-hour service limit cancels
+installation cleanly. Force stop, process termination and vendor battery restrictions can still
+stop it; verified files remain available for retry. No battery-optimization exemption is requested.
+
+Manual checks: start downloading, switch apps for a minute, return and confirm progress;
+repeat with the display off. The installation notification should disappear when work ends.
+Also retry after a connection outage and confirm that verified objects are reused.

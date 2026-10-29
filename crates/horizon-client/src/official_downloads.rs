@@ -7,7 +7,10 @@ use sha1::{Digest, Sha1};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant};
 
 const VERSION: &str = "26.3";
@@ -139,6 +142,11 @@ fn verified(path: &Path, hash: &str, size: u64, cancel: &AtomicBool) -> Result<b
 trait Network {
     fn open(&self, url: &str) -> Result<Box<dyn Read>, String>;
 }
+impl<N: Network> Network for &N {
+    fn open(&self, url: &str) -> Result<Box<dyn Read>, String> {
+        (*self).open(url)
+    }
+}
 struct OfficialNetwork(ureq::Agent);
 impl Network for OfficialNetwork {
     fn open(&self, url: &str) -> Result<Box<dyn Read>, String> {
@@ -201,6 +209,85 @@ impl<N: Network> Transfer<'_, N> {
         self.report(stage);
         Ok(())
     }
+    /// Small official objects are independent. Bound concurrency, memory and queued updates;
+    /// callbacks stay on the coordinator thread, even when the UI is suspended.
+    fn parallel(&mut self, jobs: &[(String, Value)], stage: &'static str) -> Result<(), String>
+    where
+        N: Sync,
+    {
+        const WORKERS: usize = 8;
+        let next = AtomicUsize::new(0);
+        let stop = AtomicBool::new(false);
+        let (tx, rx) = mpsc::sync_channel(64);
+        let network = &self.network;
+        let root = self.root;
+        let cancel = self.cancel;
+        let total = self.total;
+        let progress = self.progress;
+        let (result, completed, network_bytes) = std::thread::scope(|scope| {
+            for worker in 0..WORKERS.min(jobs.len()) {
+                let tx = tx.clone();
+                let next = &next;
+                let stop = &stop;
+                scope.spawn(move || {
+                    let report = |p| {
+                        let _ = tx.send((worker, Ok(p)));
+                    };
+                    let mut transfer = Transfer {
+                        network,
+                        root,
+                        cancel,
+                        progress: &report,
+                        completed: 0,
+                        total,
+                        planned: 0,
+                        network_bytes: 0,
+                    };
+                    while !stop.load(Ordering::Relaxed) {
+                        let Some((name, spec)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
+                        else {
+                            break;
+                        };
+                        if let Err(error) = transfer.fetch(spec, name, stage) {
+                            stop.store(true, Ordering::Relaxed);
+                            let _ = tx.send((worker, Err(error)));
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(tx);
+            let mut slots = [(0u64, 0u64); WORKERS];
+            let mut error = None;
+            let mut completed = 0;
+            let mut network_bytes = 0;
+            for (worker, event) in rx {
+                match event {
+                    Ok(p) => {
+                        slots[worker] = (p.completed, p.network_bytes);
+                        completed = slots.iter().map(|s| s.0).sum();
+                        network_bytes = slots.iter().map(|s| s.1).sum();
+                        progress(Progress {
+                            stage,
+                            completed,
+                            total,
+                            network_bytes,
+                        });
+                    }
+                    Err(e) => {
+                        if error.is_none() {
+                            error = Some(e);
+                        }
+                    }
+                }
+            }
+            // scope joins every transfer before a retry can touch the same cache.
+            (error.map_or(Ok(()), Err), completed, network_bytes)
+        });
+        self.completed = completed;
+        self.network_bytes = network_bytes;
+        result
+    }
     fn fetch(&mut self, spec: &Value, name: &str, stage: &'static str) -> Result<PathBuf, String> {
         let url = text(spec, "url")?;
         let hash = text(spec, "sha1")?;
@@ -219,7 +306,7 @@ impl<N: Network> Transfer<'_, N> {
             .map_err(|_| "No se pudo crear la caché")?;
         let part_name = format!("{name}.part");
         let part = path_in(self.root, &part_name)?;
-        for attempt in 0..3 {
+        for attempt in 0..12 {
             cancelled(self.cancel)?;
             let result = (|| {
                 let mut reader = self.network.open(url)?;
@@ -274,10 +361,15 @@ impl<N: Network> Transfer<'_, N> {
                     let _ = fs::remove_file(&part);
                     self.report(stage);
                     cancelled(self.cancel)?;
-                    if attempt == 2 {
+                    let transport = e == "Se interrumpió la descarga"
+                        || e == "No se pudo descargar desde Mojang; vuelve a intentarlo";
+                    if attempt >= if transport { 11 } else { 2 } {
                         return Err(e);
                     }
-                    pause(self.cancel, Duration::from_millis(250 * (1 << attempt)))?;
+                    pause(
+                        self.cancel,
+                        Duration::from_millis(250 * (1 << attempt.min(5))),
+                    )?;
                 }
             }
         }
@@ -473,9 +565,7 @@ pub fn download(
         assets.push((format!("assets/objects/{}/{hash}", &hash[..2]), spec));
     }
     transfer.begin("Recursos", assets.iter().map(|(_, spec)| spec))?;
-    for (name, spec) in assets {
-        transfer.fetch(&spec, &name, "Recursos")?;
-    }
+    transfer.parallel(&assets, "Recursos")?;
     Ok(Downloaded {
         minecraft_dir: cache.to_owned(),
         client_jar,
@@ -831,6 +921,124 @@ mod tests {
         assert_eq!(events.last().unwrap().network_bytes, 6);
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn parallel_resources_overlap_reuse_cache_and_keep_exact_totals() {
+        use std::sync::{Arc, atomic::AtomicUsize};
+        struct Concurrent {
+            active: Arc<AtomicUsize>,
+            maximum: Arc<AtomicUsize>,
+            calls: AtomicUsize,
+        }
+        struct Body {
+            active: Arc<AtomicUsize>,
+            bytes: Cursor<Vec<u8>>,
+        }
+        impl Read for Body {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(5));
+                self.bytes.read(out)
+            }
+        }
+        impl Drop for Body {
+            fn drop(&mut self) {
+                self.active.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        impl Network for Concurrent {
+            fn open(&self, _: &str) -> Result<Box<dyn Read>, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.maximum.fetch_max(active, Ordering::SeqCst);
+                Ok(Box::new(Body {
+                    active: self.active.clone(),
+                    bytes: Cursor::new(b"good".to_vec()),
+                }))
+            }
+        }
+        let dir = root();
+        let cancel = AtomicBool::new(false);
+        let events = std::cell::RefCell::new(Vec::new());
+        let record = |p| events.borrow_mut().push(p);
+        let mut t = Transfer {
+            network: Concurrent {
+                active: Arc::new(AtomicUsize::new(0)),
+                maximum: Arc::new(AtomicUsize::new(0)),
+                calls: AtomicUsize::new(0),
+            },
+            root: &dir,
+            cancel: &cancel,
+            progress: &record,
+            completed: 0,
+            total: 0,
+            planned: 0,
+            network_bytes: 0,
+        };
+        let jobs: Vec<_> = (0..24)
+            .map(|i| (format!("objects/{i}"), spec(b"good")))
+            .collect();
+        fs::create_dir_all(dir.join("objects")).unwrap();
+        fs::write(dir.join("objects/0"), b"good").unwrap();
+        t.begin("Recursos", jobs.iter().map(|(_, s)| s)).unwrap();
+        t.parallel(&jobs, "Recursos").unwrap();
+        assert_eq!(t.completed, 96);
+        assert_eq!(t.network_bytes, 92);
+        assert_eq!(t.network.calls.load(Ordering::SeqCst), 23);
+        assert!((2..=8).contains(&t.network.maximum.load(Ordering::SeqCst)));
+        assert_eq!(t.network.active.load(Ordering::SeqCst), 0);
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .all(|p| p.total == 96 && p.completed <= 96)
+        );
+        for (name, _) in &jobs {
+            assert_eq!(fs::read(dir.join(name)).unwrap(), b"good");
+        }
+        // A retry after interruption never fetches already verified objects again.
+        t.begin("Recursos", jobs.iter().map(|(_, s)| s)).unwrap();
+        t.parallel(&jobs, "Recursos").unwrap();
+        assert_eq!(t.network.calls.load(Ordering::SeqCst), 23);
+        assert_eq!(t.network_bytes, 0);
+        cancel.store(true, Ordering::Relaxed);
+        assert!(t.parallel(&jobs, "Recursos").is_err());
+        assert_eq!(t.network.active.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parallel_failure_joins_workers_and_removes_unverified_partial_files() {
+        struct Bad(std::sync::atomic::AtomicUsize);
+        impl Network for Bad {
+            fn open(&self, _: &str) -> Result<Box<dyn Read>, String> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(Cursor::new(b"evil".to_vec())))
+            }
+        }
+        let dir = root();
+        let cancel = AtomicBool::new(false);
+        let mut t = Transfer {
+            network: Bad(AtomicUsize::new(0)),
+            root: &dir,
+            cancel: &cancel,
+            progress: &|_| (),
+            completed: 0,
+            total: 0,
+            planned: 0,
+            network_bytes: 0,
+        };
+        let jobs: Vec<_> = (0..24)
+            .map(|i| (format!("objects/{i}"), spec(b"good")))
+            .collect();
+        t.begin("Recursos", jobs.iter().map(|(_, s)| s)).unwrap();
+        assert!(t.parallel(&jobs, "Recursos").is_err());
+        assert!(t.network.0.load(Ordering::Relaxed) <= 24);
+        for (name, _) in jobs {
+            assert!(!dir.join(&name).exists());
+            assert!(!dir.join(format!("{name}.part")).exists());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn cancellation_never_opens_network() {
         let dir = root();
