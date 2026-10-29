@@ -30,7 +30,7 @@ pub(crate) fn android_finish() -> Result<(), String> {
 
 /// Read Android's locale only for a first launch without a saved Minecraft language.
 #[cfg(target_os = "android")]
-fn android_locale() -> Option<String> {
+pub(crate) fn android_locale() -> Option<String> {
     let app = android_app();
     // SAFETY: the VM is owned by the AndroidApp stored for this native event loop.
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;

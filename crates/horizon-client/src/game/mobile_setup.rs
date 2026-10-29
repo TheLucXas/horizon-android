@@ -1,4 +1,5 @@
 //! Account-first startup with original artwork/font, usable before any Mojang file exists.
+use super::mobile_install_progress::InstallProgress;
 use super::*;
 use horizon_client::{auth, hud::rgba, text::Text, ui};
 use std::sync::{Mutex, atomic::AtomicBool, mpsc};
@@ -12,7 +13,7 @@ pub(super) struct Setup {
     account: mobile_account::AccountUi,
     internal: PathBuf,
     helper: PathBuf,
-    progress: Arc<Mutex<String>>,
+    progress: Arc<Mutex<InstallProgress>>,
     cancel: Arc<AtomicBool>,
     worker: Option<mpsc::Receiver<std::result::Result<PathBuf, String>>>,
     prepared: Option<PathBuf>,
@@ -51,7 +52,9 @@ impl Setup {
             account,
             internal,
             helper: crate::android_native_library_dir()?.join("libhorizon_java.so"),
-            progress: Arc::new(Mutex::new(super::mobile_locale::tr("verify_first"))),
+            progress: Arc::new(Mutex::new(InstallProgress::new(
+                &crate::android_locale().unwrap_or_else(|| "en".into()),
+            ))),
             cancel: Arc::new(AtomicBool::new(false)),
             worker: None,
             prepared: None,
@@ -216,8 +219,11 @@ impl Setup {
                             &internal,
                             &helper,
                             &cancel,
-                            &|line| {
-                                *progress.lock().unwrap_or_else(|e| e.into_inner()) = line;
+                            &|event| {
+                                progress
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .update(event, Instant::now());
                             },
                         );
                         let _ = tx.send(result);
@@ -232,6 +238,7 @@ impl Setup {
                     self.worker = None;
                 }
                 Ok(Err(e)) => {
+                    log::warn!("Android installer: {e}");
                     self.failure = Some(e);
                     self.worker = None;
                 }
@@ -304,48 +311,75 @@ impl Setup {
             self.account.open = true;
             self.account.draw(&mut batch, atlas, size);
         } else {
-            batch.text(
-                atlas,
-                &super::mobile_locale::tr("installation"),
-                20.,
-                20.,
-                rgba(255, 255, 255, 255),
-                false,
-            );
-            let message = self.failure.clone().unwrap_or_else(|| {
-                self.progress
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone()
-            });
-            let mut row = 0;
-            let mut line = String::new();
-            for word in message.split_whitespace() {
-                if HudBatch::text_width(atlas, &format!("{line} {word}")) > batch.width - 40. {
-                    batch.text(
-                        atlas,
-                        &line,
-                        20.,
-                        55. + row as f32 * 12.,
-                        rgba(215, 216, 230, 255),
-                        false,
-                    );
-                    row += 1;
-                    line.clear();
+            let (title, lines, fraction, retry) = {
+                let state = self.progress.lock().unwrap_or_else(|e| e.into_inner());
+                let lines = self.failure.as_ref().map_or_else(
+                    || state.lines(Instant::now()),
+                    |error| vec![state.error(error)],
+                );
+                (
+                    state.text("installation"),
+                    lines,
+                    state.fraction(),
+                    state.text("retry"),
+                )
+            };
+            batch.text(atlas, title, 20., 20., rgba(255, 255, 255, 255), false);
+            let mut row = 0u32;
+            for paragraph in lines {
+                let mut line = String::new();
+                for word in paragraph.split_whitespace() {
+                    let candidate = if line.is_empty() {
+                        word.to_owned()
+                    } else {
+                        format!("{line} {word}")
+                    };
+                    if HudBatch::text_width(atlas, &candidate) > batch.width - 40.
+                        && !line.is_empty()
+                    {
+                        batch.text(
+                            atlas,
+                            &line,
+                            20.,
+                            55. + row as f32 * 14.,
+                            rgba(215, 216, 230, 255),
+                            false,
+                        );
+                        row += 1;
+                        line.clear();
+                    }
+                    if !line.is_empty() {
+                        line.push(' ');
+                    }
+                    line.push_str(word);
                 }
-                if !line.is_empty() {
-                    line.push(' ');
-                }
-                line.push_str(word);
+                batch.text(
+                    atlas,
+                    &line,
+                    20.,
+                    55. + row as f32 * 14.,
+                    rgba(215, 216, 230, 255),
+                    false,
+                );
+                row += 1;
             }
-            batch.text(
-                atlas,
-                &line,
-                20.,
-                55. + row as f32 * 12.,
-                rgba(215, 216, 230, 255),
-                false,
-            );
+            if self.failure.is_none()
+                && let Some(fraction) = fraction
+            {
+                let y = 70. + row as f32 * 14.;
+                if y + 5. <= batch.height - 20. {
+                    let width = (batch.width - 40.).max(0.).floor();
+                    batch.fill(atlas, 20., y, width, 5., rgba(48, 51, 69, 255));
+                    batch.fill(
+                        atlas,
+                        20.,
+                        y,
+                        (width * fraction).floor(),
+                        5.,
+                        rgba(166, 137, 255, 255),
+                    );
+                }
+            }
             if self.failure.is_some() {
                 ui::button(
                     &mut batch,
@@ -354,7 +388,7 @@ impl Setup {
                     size[1] as f32 / HudBatch::new(size).scale - 42.,
                     150.,
                     24.,
-                    &Text::literal(super::mobile_locale::tr("retry")),
+                    &Text::literal(retry),
                     true,
                     false,
                 );

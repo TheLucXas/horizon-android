@@ -29,6 +29,8 @@ pub struct Progress {
     pub stage: &'static str,
     pub completed: u64,
     pub total: u64,
+    /// Bytes received from the network, excluding cache hits and including retries.
+    pub network_bytes: u64,
 }
 
 /// Verified official launcher-style input tree; never treat this as prepared game data.
@@ -159,8 +161,46 @@ struct Transfer<'a, N> {
     progress: &'a dyn Fn(Progress),
     completed: u64,
     total: u64,
+    planned: u64,
+    network_bytes: u64,
 }
 impl<N: Network> Transfer<'_, N> {
+    fn report(&self, stage: &'static str) {
+        (self.progress)(Progress {
+            stage,
+            completed: self.completed,
+            total: self.total,
+            network_bytes: self.network_bytes,
+        });
+    }
+    /// Plan the complete stage before emitting any download progress for it.
+    fn begin<'s>(
+        &mut self,
+        stage: &'static str,
+        specs: impl IntoIterator<Item = &'s Value>,
+    ) -> Result<(), String> {
+        let mut total = 0u64;
+        for spec in specs {
+            let size = spec["size"]
+                .as_u64()
+                .filter(|&n| n <= FILE_LIMIT)
+                .ok_or("Metadatos de descarga no válidos")?;
+            total = total
+                .checked_add(size)
+                .filter(|&n| n <= TOTAL_LIMIT)
+                .ok_or("La descarga excede el límite permitido")?;
+        }
+        self.planned = self
+            .planned
+            .checked_add(total)
+            .filter(|&n| n <= TOTAL_LIMIT)
+            .ok_or("La descarga excede el límite permitido")?;
+        self.completed = 0;
+        self.network_bytes = 0;
+        self.total = total;
+        self.report(stage);
+        Ok(())
+    }
     fn fetch(&mut self, spec: &Value, name: &str, stage: &'static str) -> Result<PathBuf, String> {
         let url = text(spec, "url")?;
         let hash = text(spec, "sha1")?;
@@ -168,19 +208,11 @@ impl<N: Network> Transfer<'_, N> {
         if !official(url) || !hash_valid(hash) || size > FILE_LIMIT {
             return Err("Metadatos de descarga no válidos".into());
         }
-        self.total = self
-            .total
-            .checked_add(size)
-            .filter(|&n| n <= TOTAL_LIMIT)
-            .ok_or("La descarga excede el límite permitido")?;
+        self.report(stage);
         let path = path_in(self.root, name)?;
         if verified(&path, hash, size, self.cancel)? {
             self.completed += size;
-            (self.progress)(Progress {
-                stage,
-                completed: self.completed,
-                total: self.total,
-            });
+            self.report(stage);
             return Ok(path);
         }
         fs::create_dir_all(path.parent().ok_or("Ruta sin directorio")?)
@@ -208,6 +240,7 @@ impl<N: Network> Transfer<'_, N> {
                     if n == 0 {
                         break;
                     }
+                    self.network_bytes = self.network_bytes.saturating_add(n as u64);
                     count += n as u64;
                     if count > size {
                         return Err("El archivo supera su tamaño declarado".into());
@@ -219,6 +252,7 @@ impl<N: Network> Transfer<'_, N> {
                         stage,
                         completed: self.completed + count,
                         total: self.total,
+                        network_bytes: self.network_bytes,
                     });
                 }
                 if count != size || format!("{:x}", digest.finalize()) != hash {
@@ -233,10 +267,12 @@ impl<N: Network> Transfer<'_, N> {
             match result {
                 Ok(()) => {
                     self.completed += size;
+                    self.report(stage);
                     return Ok(path);
                 }
                 Err(e) => {
                     let _ = fs::remove_file(&part);
+                    self.report(stage);
                     cancelled(self.cancel)?;
                     if attempt == 2 {
                         return Err(e);
@@ -340,8 +376,11 @@ pub fn download(
         progress: &progress,
         completed: 0,
         total: 0,
+        planned: 0,
+        network_bytes: 0,
     };
     cancelled(cancel)?;
+    transfer.report("Manifiesto");
     // This immutable, pinned manifest is also listed by Mojang's public version manifest.
     // Fetch it directly so a later republishing cannot silently change this game's specification.
     let hash = MANIFESTS[0];
@@ -360,11 +399,13 @@ pub fn download(
     {
         return Err("La versión oficial no coincide con Horizon".into());
     }
+    transfer.begin("Cliente", [&manifest["downloads"]["client"]])?;
     let client_jar = transfer.fetch(
         &manifest["downloads"]["client"],
         "versions/26.3/26.3.jar",
         "Cliente",
     )?;
+    transfer.begin("Servidor", [&manifest["downloads"]["server"]])?;
     let server_jar = transfer.fetch(
         &manifest["downloads"]["server"],
         "versions/26.3/server.jar",
@@ -373,29 +414,31 @@ pub fn download(
     let libraries = manifest["libraries"]
         .as_array()
         .ok_or("Faltan las bibliotecas oficiales")?;
-    for library in libraries {
-        // Headless exporters need Java artifacts, never OS-specific LWJGL native classifiers.
-        if library["natives"].is_object()
-            || library["rules"]
-                .as_array()
-                .is_some_and(|rules| rules.iter().any(|r| r["os"].is_object()))
-        {
-            continue;
-        }
-        let artifact = &library["downloads"]["artifact"];
-        if artifact.is_object() {
-            transfer.fetch(
-                artifact,
-                &format!("libraries/{}", text(artifact, "path")?),
-                "Bibliotecas",
-            )?;
-        }
+    let artifacts: Vec<&Value> = libraries
+        .iter()
+        .filter(|library| {
+            !library["natives"].is_object()
+                && !library["rules"]
+                    .as_array()
+                    .is_some_and(|rules| rules.iter().any(|r| r["os"].is_object()))
+        })
+        .map(|library| &library["downloads"]["artifact"])
+        .filter(|artifact| artifact.is_object())
+        .collect();
+    transfer.begin("Bibliotecas", artifacts.iter().copied())?;
+    for artifact in artifacts {
+        transfer.fetch(
+            artifact,
+            &format!("libraries/{}", text(artifact, "path")?),
+            "Bibliotecas",
+        )?;
     }
     let index = &manifest["assetIndex"];
     let id = text(index, "id")?;
     if relative(id)?.components().count() != 1 {
         return Err("Identificador de recursos no válido".into());
     }
+    transfer.begin("Índice de recursos", [index])?;
     let index_path = transfer.fetch(
         index,
         &format!("assets/indexes/{id}.json"),
@@ -405,18 +448,33 @@ pub fn download(
     let objects = objects["objects"]
         .as_object()
         .ok_or("Índice de recursos no válido")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut assets = Vec::new();
+    let mut expanded = transfer.planned;
     for (name, object) in objects {
         relative(name)?;
         let hash = text(object, "hash")?;
         if !hash_valid(hash) {
             return Err("SHA-1 de recurso no válido".into());
         }
+        // Keep the logical expansion bound even when identical cache objects are deduplicated.
+        let size = object["size"]
+            .as_u64()
+            .filter(|&n| n <= FILE_LIMIT)
+            .ok_or("Tamaño de recurso no válido")?;
+        expanded = expanded
+            .checked_add(size)
+            .filter(|&n| n <= TOTAL_LIMIT)
+            .ok_or("La descarga excede el límite permitido")?;
+        if !seen.insert(hash.to_owned()) {
+            continue;
+        }
         let spec = serde_json::json!({"url":format!("https://resources.download.minecraft.net/{}/{hash}", &hash[..2]), "sha1":hash,"size":object["size"]});
-        transfer.fetch(
-            &spec,
-            &format!("assets/objects/{}/{hash}", &hash[..2]),
-            "Recursos",
-        )?;
+        assets.push((format!("assets/objects/{}/{hash}", &hash[..2]), spec));
+    }
+    transfer.begin("Recursos", assets.iter().map(|(_, spec)| spec))?;
+    for (name, spec) in assets {
+        transfer.fetch(&spec, &name, "Recursos")?;
     }
     Ok(Downloaded {
         minecraft_dir: cache.to_owned(),
@@ -524,6 +582,7 @@ fn extract_jar_assets(
             stage: "Extracción",
             completed: i as u64 + 1,
             total: entries as u64,
+            network_bytes: 0,
         });
     }
     Ok(())
@@ -654,7 +713,9 @@ mod tests {
             cancel: &cancel,
             progress: &|_| (),
             completed: 0,
-            total: 0,
+            total: 64,
+            planned: 0,
+            network_bytes: 0,
         };
         let file = t.fetch(&spec(b"good"), "a/file", "test").unwrap();
         assert_eq!(t.network.calls.get(), 2);
@@ -681,12 +742,93 @@ mod tests {
                 cancel: &cancel,
                 progress: &|_| (),
                 completed: 0,
-                total: 0,
+                total: 64,
+                planned: 0,
+                network_bytes: 0,
             };
             assert!(t.fetch(&spec(b"good"), "file", "test").is_err());
             assert!(!dir.join("file").exists());
             assert!(!dir.join("file.part").exists());
         }
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn planned_total_stays_fixed_and_cache_hits_do_not_inflate_network_bytes() {
+        let dir = root();
+        fs::write(dir.join("cached"), b"good").unwrap();
+        let events = std::cell::RefCell::new(Vec::new());
+        let record = |p| events.borrow_mut().push(p);
+        let cancel = AtomicBool::new(false);
+        let mut transfer = Transfer {
+            network: Mock {
+                bytes: b"good".to_vec(),
+                calls: Cell::new(0),
+                fail_first: true,
+            },
+            root: &dir,
+            cancel: &cancel,
+            progress: &record,
+            completed: 0,
+            total: 0,
+            planned: 0,
+            network_bytes: 0,
+        };
+        let specs = [spec(b"good"), spec(b"good")];
+        transfer.begin("Recursos", &specs).unwrap();
+        transfer.fetch(&specs[0], "cached", "Recursos").unwrap();
+        transfer.fetch(&specs[1], "new", "Recursos").unwrap();
+        let events = events.borrow();
+        assert!(events.iter().all(|p| p.total == 8 && p.completed <= 8));
+        assert_eq!(events.last().unwrap().completed, 8);
+        assert_eq!(events.last().unwrap().network_bytes, 4);
+        assert_eq!(transfer.network.calls.get(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn interrupted_transfer_keeps_total_and_counts_retransmitted_network_bytes() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("interrupted"))
+            }
+        }
+        struct Flaky(Cell<usize>);
+        impl Network for Flaky {
+            fn open(&self, _: &str) -> Result<Box<dyn Read>, String> {
+                self.0.set(self.0.get() + 1);
+                if self.0.get() == 1 {
+                    Ok(Box::new(Cursor::new(b"go".to_vec()).chain(Broken)))
+                } else {
+                    Ok(Box::new(Cursor::new(b"good".to_vec())))
+                }
+            }
+        }
+        let dir = root();
+        let cancel = AtomicBool::new(false);
+        let events = std::cell::RefCell::new(Vec::new());
+        let record = |p| events.borrow_mut().push(p);
+        let mut transfer = Transfer {
+            network: Flaky(Cell::new(0)),
+            root: &dir,
+            cancel: &cancel,
+            progress: &record,
+            completed: 0,
+            total: 0,
+            planned: 0,
+            network_bytes: 0,
+        };
+        let specification = spec(b"good");
+        transfer.begin("Recursos", [&specification]).unwrap();
+        transfer.fetch(&specification, "file", "Recursos").unwrap();
+        let events = events.borrow();
+        assert!(events.iter().all(|p| p.total == 4 && p.completed <= 4));
+        assert!(
+            events
+                .iter()
+                .any(|p| p.completed == 0 && p.network_bytes == 2)
+        );
+        assert_eq!(events.last().unwrap().completed, 4);
+        assert_eq!(events.last().unwrap().network_bytes, 6);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -703,7 +845,9 @@ mod tests {
             cancel: &cancel,
             progress: &|_| (),
             completed: 0,
-            total: 0,
+            total: 64,
+            planned: 0,
+            network_bytes: 0,
         };
         assert!(t.fetch(&spec(b"good"), "file", "test").is_err());
         assert_eq!(t.network.calls.get(), 0);
@@ -732,7 +876,9 @@ mod tests {
             cancel: &cancel,
             progress: &|_| (),
             completed: 0,
-            total: 0,
+            total: 64,
+            planned: 0,
+            network_bytes: 0,
         };
         let file = transfer
             .fetch(&spec(b"good"), "versions/client", "test")

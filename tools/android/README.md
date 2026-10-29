@@ -114,3 +114,15 @@ constructing installation paths. Symlinks in the installation/cache descendants
 remain forbidden; no downloaded or archive-controlled path is canonicalized to
 bypass those checks. The APK launcher icon reuses upstream Horizon artwork under
 its MIT license, with attribution in CREDITS.md.
+
+### Download telemetry and installer language (0.5.3)
+
+The installer reads Android's locale directly, independently of a saved Minecraft
+language, with Spanish/English/Portuguese strings and English fallback. Each
+file group is planned before downloading, keeping its byte total fixed; duplicate
+asset hashes share one cache object. Progress counts verified cache hits, but speed
+counts only bytes received from the network, including retransmissions. MB/GB use
+decimal units (1 GB = 1,000 MB). A rolling throughput estimate supplies the ETA for
+the current download group, with calculating/unknown states during warm-up,
+stalls or missing Content-Length. Preparation/extraction stages have no download
+speed or invented ETA. Verified cached files are reused on retry/update.

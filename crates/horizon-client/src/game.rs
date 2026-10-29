@@ -105,6 +105,8 @@ mod mobile_hud;
 #[cfg(target_os = "android")]
 mod mobile_ime;
 #[cfg(target_os = "android")]
+mod mobile_install_progress;
+#[cfg(target_os = "android")]
 pub(crate) mod mobile_locale;
 #[cfg(target_os = "android")]
 mod mobile_setup;

@@ -1,4 +1,5 @@
 //! First-run preparation. Proprietary inputs are fetched on the device, never embedded.
+use super::mobile_install_progress::{Event, Status};
 use horizon_client::{auth, official_downloads};
 use sha2::{Digest, Sha256};
 use std::{
@@ -95,7 +96,7 @@ impl Write for Output<'_> {
     }
 }
 
-fn runtime(base: &Path, cancel: &AtomicBool, progress: &dyn Fn(String)) -> Result<PathBuf, String> {
+fn runtime(base: &Path, cancel: &AtomicBool, progress: &dyn Fn(Event)) -> Result<PathBuf, String> {
     let error = |e: io::Error| e.to_string();
     let directory = base.join("openjdk-25");
     if fs::read_to_string(directory.join(".archive-sha256"))
@@ -111,21 +112,49 @@ fn runtime(base: &Path, cancel: &AtomicBool, progress: &dyn Fn(String)) -> Resul
     check(cancel)?;
     let archive = base.join("openjdk-25.tar.xz");
     if hash(&archive).ok().as_deref() != Some(RUNTIME_HASH) {
-        progress("Descargando OpenJDK 25 para preparar los recursos…".into());
         let temporary = base.join("openjdk-25.tar.xz.partial");
-        let mut response = ureq::AgentBuilder::new()
+        let response = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(90))
             .build()
             .get(RUNTIME_URL)
             .call()
-            .map_err(|_| "No se pudo descargar OpenJDK. Reintentá la instalación.")?
-            .into_reader();
+            .map_err(|_| "No se pudo descargar OpenJDK. Reintentá la instalación.")?;
+        let total = response
+            .header("Content-Length")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        if total > 96 * 1024 * 1024 {
+            return Err("Runtime too large".into());
+        }
+        let mut response = response.into_reader();
         let mut output = Output {
             file: File::create(&temporary).map_err(error)?,
             remaining: 96 * 1024 * 1024,
             cancel,
         };
-        io::copy(&mut response, &mut output).map_err(error)?;
+        let mut completed = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        progress(Event::Download(official_downloads::Progress {
+            stage: "OpenJDK",
+            completed,
+            total,
+            network_bytes: completed,
+        }));
+        loop {
+            check(cancel)?;
+            let n = response.read(&mut buffer).map_err(error)?;
+            if n == 0 {
+                break;
+            }
+            output.write_all(&buffer[..n]).map_err(error)?;
+            completed += n as u64;
+            progress(Event::Download(official_downloads::Progress {
+                stage: "OpenJDK",
+                completed,
+                total,
+                network_bytes: completed,
+            }));
+        }
         output.file.sync_all().map_err(error)?;
         if hash(&temporary).map_err(error)? != RUNTIME_HASH {
             let _ = fs::remove_file(&temporary);
@@ -133,7 +162,7 @@ fn runtime(base: &Path, cancel: &AtomicBool, progress: &dyn Fn(String)) -> Resul
         }
         fs::rename(temporary, &archive).map_err(error)?;
     }
-    progress("Preparando OpenJDK 25…".into());
+    progress(Event::Status(Status::RuntimePreparing));
     let tar_path = base.join("openjdk-25.tar.partial");
     let mut output = Output {
         file: File::create(&tar_path).map_err(error)?,
@@ -168,7 +197,7 @@ pub(super) fn prepare(
     internal: &Path,
     helper: &Path,
     cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(String),
+    progress: &dyn Fn(Event),
 ) -> Result<PathBuf, String> {
     check(cancel)?;
     let _proof = ProofWatch::new(cancel.clone());
@@ -188,10 +217,11 @@ pub(super) fn prepare(
         if !auth::android_verified() {
             cancel.store(true, Ordering::Relaxed);
         }
-        progress(format!("{}: {} / {}", p.stage, p.completed, p.total));
+        progress(Event::Download(p));
     })?;
     check(cancel)?;
     let runtime = runtime(&base, cancel, progress)?;
+    progress(Event::Status(Status::GamePreparing));
     let root = base.join("preparation");
     for (name, bytes) in PREPARE_SOURCES {
         let target = root.join(name);
@@ -212,12 +242,12 @@ pub(super) fn prepare(
         if !auth::android_verified() {
             cancel.store(true, Ordering::Relaxed);
         }
-        progress(line.to_owned());
+        log::debug!("Android preparation: {line}");
     })?;
     check(cancel)?;
-    progress("Instalando sonidos e idiomas…".into());
+    progress(Event::Status(Status::Sounds));
     horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &|s| {
-        progress(s.to_owned())
+        log::debug!("Android sounds: {s}")
     })?;
     check(cancel)?;
     Ok(prepared)
