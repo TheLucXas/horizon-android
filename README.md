@@ -11,8 +11,9 @@ ownership before gameplay or preparation. It downloads game inputs from official
 Mojang endpoints and an OpenJDK runtime separately on the device; game JARs,
 extracted assets and prepared game data are not bundled in the repository or APK.
 Original upstream documentation screenshots are retained as documentation.
-The Client ID is awaiting Mojang review: real sign-in and premium-server validation
-remain blocked until approval; a successful browser login alone does not unlock play.
+AppID approval was reported on 2026-10-28, and real account sign-in has reached
+the installer. Complete installation and premium-server validation remain pending;
+a successful browser login alone does not unlock play.
 
 - [Android build and first-run design](tools/android/README.md)
 - [Preparation validation and limitations](docs/android-resource-preparation.md)

@@ -10,6 +10,9 @@ The original commit ancestry and copyright notice are retained.
 The Horizon source is distributed under the original [MIT license](LICENSE),
 Copyright (c) 2026 Ludovic. Existing authorship notices in individual files remain intact.
 
+The Android launcher icon reuses the original Horizon artwork from
+`packaging/icons/hicolor/512x512/apps/horizon.png`, under the upstream MIT license.
+
 ## Android adaptation
 
 The Android port is maintained by [TheLucXas](https://github.com/TheLucXas).

@@ -27,9 +27,13 @@ impl Drop for Setup {
 }
 impl Setup {
     pub fn new(options: Options, settings: Settings) -> Result<Self> {
-        let internal = crate::android_app()
-            .internal_data_path()
-            .ok_or("No private installation directory")?;
+        // Android may expose this OS-owned directory through /data/user/0 -> /data/data.
+        // Resolve only that trusted anchor; downloader paths below it still reject symlinks.
+        let internal = std::fs::canonicalize(
+            crate::android_app()
+                .internal_data_path()
+                .ok_or("No private installation directory")?,
+        )?;
         let root = super::mobile_bootstrap_art::original_artwork(&internal)?;
         let mut account = mobile_account::AccountUi::default();
         account.set_mandatory(true);

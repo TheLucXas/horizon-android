@@ -9,7 +9,7 @@ GPU are required. Performance and hardware compatibility must be tested on each 
 Install Rust 1.90+, the `aarch64-linux-android` target and `cargo-ndk`. Then:
 
 ```sh
-cargo ndk -t arm64-v8a -p 28 build -p horizon-android --release
+cargo ndk --target arm64-v8a --platform 28 build -p horizon-android --release
 keytool -genkeypair -keystore android-debug.keystore -storepass android -keypass android \
   -alias androiddebugkey -dname 'CN=Horizon Android Development' -keyalg RSA -validity 10000
 CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" \
@@ -25,7 +25,7 @@ key, not a publisher's release identity. The APK contains no Mojang resources.
 ## First-run installation
 
 The Android startup uses only original geometric widgets and the bundled OFL-licensed
-Geist font until the account has been verified. Microsoft sign-in, Java Edition
+Pixelify Sans bitmap font until the account has been verified. Microsoft sign-in, Java Edition
 entitlements and the matching official profile are mandatory before downloading
 Minecraft inputs or entering any local world or server. Cached accounts are checked
 online on startup; failed verification does not fall back to a guest identity.
@@ -105,3 +105,12 @@ start an Android build. Use GitHub Actions → Android APK → Run workflow, sel
 the `android` branch, or `gh workflow run android.yml --ref android`.
 Successful runs provide the `horizon-android-arm64` APK artifact.
 The workflow uses a standard `ubuntu-latest` GitHub-hosted runner in this public repository.
+
+### Android private-directory aliases (0.5.2)
+
+NativeActivity may return `/data/user/0/...`, where Android links `user/0` to
+`/data/data`. Setup canonicalizes this trusted OS-provided app directory before
+constructing installation paths. Symlinks in the installation/cache descendants
+remain forbidden; no downloaded or archive-controlled path is canonicalized to
+bypass those checks. The APK launcher icon reuses upstream Horizon artwork under
+its MIT license, with attribution in CREDITS.md.

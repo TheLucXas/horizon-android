@@ -711,6 +711,51 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn android_system_alias_resolves_before_checking_private_cache() {
+        let dir = root();
+        let physical = dir.join("data");
+        fs::create_dir_all(physical.join("app/files")).unwrap();
+        let alias = dir.join("user-0");
+        std::os::unix::fs::symlink(&physical, &alias).unwrap();
+        let android_private = alias.join("app/files");
+        // NativeActivity supplies a trusted app directory, not an archive or download path.
+        let private = fs::canonicalize(android_private).unwrap();
+        let cache = private.join("installation/minecraft");
+        let cancel = AtomicBool::new(false);
+        let mut transfer = Transfer {
+            network: Mock {
+                bytes: b"good".to_vec(),
+                calls: Cell::new(0),
+                fail_first: false,
+            },
+            root: &cache,
+            cancel: &cancel,
+            progress: &|_| (),
+            completed: 0,
+            total: 0,
+        };
+        let file = transfer
+            .fetch(&spec(b"good"), "versions/client", "test")
+            .unwrap();
+        assert_eq!(fs::read(file).unwrap(), b"good");
+        let outside = dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, cache.join("escape")).unwrap();
+        assert!(
+            transfer
+                .fetch(&spec(b"good"), "escape/file", "test")
+                .is_err()
+        );
+        assert_eq!(transfer.network.calls.get(), 1);
+        assert!(!outside.join("file").exists());
+        // A symlink in the cache root itself remains forbidden as well.
+        let bad_root = private.join("linked-cache");
+        std::os::unix::fs::symlink(&outside, &bad_root).unwrap();
+        assert!(path_in(&bad_root, "file").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
     fn rejects_symlinked_destination() {
         let dir = root();
         std::os::unix::fs::symlink(std::env::temp_dir(), dir.join("escape")).unwrap();

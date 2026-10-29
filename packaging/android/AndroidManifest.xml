@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.horizon.android" android:versionCode="6" android:versionName="0.5.1-android-dev">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.horizon.android" android:versionCode="7" android:versionName="0.5.2-android-dev">
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
-    <application android:label="Horizon" android:hasCode="false" android:allowBackup="false" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+    <application android:icon="@drawable/app_icon" android:roundIcon="@drawable/app_icon" android:label="Horizon" android:hasCode="false" android:allowBackup="false" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <activity android:name="android.app.NativeActivity" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|density|uiMode" android:exported="true">
             <meta-data android:name="android.app.lib_name" android:value="horizon_android" />
             <intent-filter>

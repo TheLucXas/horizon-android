@@ -1,6 +1,8 @@
 name: Android APK
 on:
   workflow_dispatch:
+env:
+  CARGO_BUILD_JOBS: 2
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -15,13 +17,15 @@ jobs:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
       - name: Android tools
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;30.0.16248370'
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;30.0.16248370'
+          for name in ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_NDK; do
+            echo "$name=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+          done
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+        run: cargo install cargo-ndk --version 4.1.2 --locked
       - name: Build native game
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.16248370
-        run: cargo ndk -t arm64-v8a -p 28 build -p horizon-android --release --locked
+        run: cargo ndk --target arm64-v8a --platform 28 build -p horizon-android --release --locked
       - name: Build resource preparation helper
         run: |
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
