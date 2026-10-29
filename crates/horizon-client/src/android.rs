@@ -36,6 +36,7 @@ static INSTALL_CANCEL: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic:
 
 #[cfg(target_os = "android")]
 pub(crate) struct AndroidInstallation {
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     vm: jni::JavaVM,
     context: jni::objects::GlobalRef,
     intent: jni::objects::GlobalRef,
@@ -46,6 +47,9 @@ impl AndroidInstallation {
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Self, String> {
         use jni::objects::{JObject, JValue};
+        // Serialize service commands as well as ownership: an old worker may still unwind
+        // after NativeActivity has created a replacement installer.
+        let mut owner = INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner());
         let app = android_app();
         // SAFETY: AndroidApp owns the live VM and Activity during this call.
         let vm =
@@ -87,8 +91,9 @@ impl AndroidInstallation {
         };
         let (context, intent) =
             result.map_err(|e| format!("Could not start installation service: {e}"))?;
-        *INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel);
+        *owner = Some(cancel.clone());
         Ok(Self {
+            cancel,
             vm,
             context,
             intent,
@@ -98,6 +103,13 @@ impl AndroidInstallation {
 #[cfg(target_os = "android")]
 impl Drop for AndroidInstallation {
     fn drop(&mut self) {
+        let mut owner = INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner());
+        if !owner
+            .as_ref()
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, &self.cancel))
+        {
+            return;
+        }
         if let Ok(mut env) = self.vm.attach_current_thread() {
             let result = env.call_method(
                 self.context.as_obj(),
@@ -109,7 +121,7 @@ impl Drop for AndroidInstallation {
                 let _ = env.exception_clear();
             }
         }
-        *INSTALL_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *owner = None;
     }
 }
 #[cfg(target_os = "android")]
