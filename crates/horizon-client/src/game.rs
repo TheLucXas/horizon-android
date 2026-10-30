@@ -11050,8 +11050,16 @@ impl ApplicationHandler for Game<'_> {
                         MouseScrollDelta::PixelDelta(p) => (p.x / 30.0, p.y / 30.0),
                     };
                     // MouseHandler.onScroll: discrete scrolling and the wheel sensitivity.
-                    let discrete = self.settings.discrete_scroll;
-                    let wheel_sensitivity = f64::from(self.settings.mouse_wheel_sensitivity);
+                    #[cfg(target_os = "android")]
+                    let finger_scroll = self.mobile.menu_scrolling;
+                    #[cfg(not(target_os = "android"))]
+                    let finger_scroll = false;
+                    let discrete = !finger_scroll && self.settings.discrete_scroll;
+                    let wheel_sensitivity = if finger_scroll {
+                        1.0
+                    } else {
+                        f64::from(self.settings.mouse_wheel_sensitivity)
+                    };
                     let scaled = |v: f64| {
                         (if discrete {
                             horizon_client::mouse::java_signum(v)
@@ -13057,6 +13065,10 @@ struct Loading {
     handle: Option<JoinHandle<()>>,
     shown: bool,
     menu: startup_menu::StartupMenu,
+    #[cfg(target_os = "android")]
+    menu_touch: horizon_client::mobile_menu_touch::MenuTouch,
+    #[cfg(target_os = "android")]
+    menu_scrolling: bool,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -13133,36 +13145,32 @@ impl Loading {
         let event = mobile::translate_event(event);
         #[cfg(target_os = "android")]
         if let WindowEvent::Touch(touch) = &event {
-            self.window_event(
-                event_loop,
-                id,
-                WindowEvent::CursorMoved {
-                    device_id: touch.device_id,
-                    position: touch.location,
-                },
+            let batch = HudBatch::new(self.menu_size());
+            let actions = self.menu_touch.update(
+                touch.id,
+                mobile::menu_phase(touch.phase),
+                [touch.location.x, touch.location.y],
+                f64::from(batch.scale),
+                horizon_client::mobile_menu_touch::Mode::Scroll,
+                Instant::now(),
             );
-            if matches!(
-                touch.phase,
-                winit::event::TouchPhase::Started
-                    | winit::event::TouchPhase::Ended
-                    | winit::event::TouchPhase::Cancelled
-            ) {
-                self.window_event(
-                    event_loop,
-                    id,
-                    WindowEvent::MouseInput {
-                        device_id: touch.device_id,
-                        state: if touch.phase == winit::event::TouchPhase::Started {
-                            ElementState::Pressed
-                        } else {
-                            ElementState::Released
-                        },
-                        button: MouseButton::Left,
-                    },
+            for action in actions {
+                self.menu_scrolling = matches!(
+                    action,
+                    horizon_client::mobile_menu_touch::Action::Scroll { .. }
                 );
+                for event in mobile::menu_events(action, touch.device_id) {
+                    self.window_event(event_loop, id, event);
+                }
+                self.menu_scrolling = false;
             }
             return;
         }
+        #[cfg(target_os = "android")]
+        if matches!(event, WindowEvent::Focused(false) | WindowEvent::Resized(_)) {
+            self.menu_touch.clear();
+        }
+
         if let Err(error) = self.menu_event(event_loop, event) {
             self.error = Some(error);
             event_loop.exit();
@@ -13507,6 +13515,10 @@ fn run_loading_desktop(
         handle: Some(loader),
         shown: false,
         menu,
+        #[cfg(target_os = "android")]
+        menu_touch: Default::default(),
+        #[cfg(target_os = "android")]
+        menu_scrolling: false,
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));

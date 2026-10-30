@@ -202,3 +202,7 @@ pub mod world_spawn;
 pub mod worldborder;
 pub mod zip;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Android-friendly menu touch recognition (also tested without a window).
+pub mod mobile_menu_touch;
+

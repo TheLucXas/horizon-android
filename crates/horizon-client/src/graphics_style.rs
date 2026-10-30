@@ -61,8 +61,16 @@ pub const STYLE: Style = Style {
     header_height: 16.0,
     band: 33.0,
     title_color: u32::MAX,
-    header_color: opaque(255, 255, 85),
-    description_color: opaque(170, 170, 170),
+    header_color: if cfg!(target_os = "android") {
+        opaque(190, 170, 255)
+    } else {
+        opaque(255, 255, 85)
+    },
+    description_color: if cfg!(target_os = "android") {
+        opaque(210, 216, 230)
+    } else {
+        opaque(170, 170, 170)
+    },
     cost_colors: [
         opaque(120, 200, 120),
         opaque(170, 220, 120),
@@ -93,6 +101,20 @@ impl Style {
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         ui::list_background(batch, atlas, top, bottom, in_world);
+        #[cfg(target_os = "android")]
+        {
+            // Keep Minecraft widgets, but give long mobile settings pages a quiet, legible panel.
+            batch.fill(atlas, 0., 0., w, h, crate::hud::rgba(12, 17, 29, 210));
+            batch.fill(atlas, 0., 0., w, top, crate::hud::rgba(12, 17, 29, 200));
+            batch.fill(
+                atlas,
+                0.,
+                bottom,
+                w,
+                h - bottom,
+                crate::hud::rgba(12, 17, 29, 200),
+            );
+        }
     }
     pub fn frame(
         &self,

@@ -296,6 +296,8 @@ impl Setup {
                 handle: Some(handle),
                 shown: false,
                 menu,
+                menu_touch: Default::default(),
+                menu_scrolling: false,
                 error: None,
             }));
         }

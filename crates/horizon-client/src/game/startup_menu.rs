@@ -322,7 +322,7 @@ impl Loading {
         );
     }
 
-    fn menu_size(&self) -> [u32; 2] {
+    pub(super) fn menu_size(&self) -> [u32; 2] {
         self.renderer
             .as_ref()
             .map_or([1280, 720], |r| [r.config.width, r.config.height])
@@ -593,11 +593,19 @@ impl Loading {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 30.0) as f32,
                 };
-                let amount = if self.settings.discrete_scroll {
+                #[cfg(target_os = "android")]
+                let finger_scroll = self.menu_scrolling;
+                #[cfg(not(target_os = "android"))]
+                let finger_scroll = false;
+                let amount = if !finger_scroll && self.settings.discrete_scroll {
                     horizon_client::mouse::java_signum(f64::from(raw)) as f32
                 } else {
                     raw
-                } * self.settings.mouse_wheel_sensitivity;
+                } * if finger_scroll {
+                    1.0
+                } else {
+                    self.settings.mouse_wheel_sensitivity
+                };
                 let batch = HudBatch::new(self.menu_size());
                 if self.menu.options_open {
                     self.menu.options.scroll_at(

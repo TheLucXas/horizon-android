@@ -20,7 +20,8 @@ pub(super) struct Mobile {
     pad: PadState,
     keys: PadState,
     using_pad: bool,
-    menu_finger: Option<u64>,
+    menu_touch: horizon_client::mobile_menu_touch::MenuTouch,
+    pub(super) menu_scrolling: bool,
     settings: TouchSettings,
     editing: bool,
     drag: Option<(u64, usize)>,
@@ -43,7 +44,8 @@ impl Default for Mobile {
             pad: PadState::default(),
             keys: PadState::default(),
             using_pad: false,
-            menu_finger: None,
+            menu_touch: Default::default(),
+            menu_scrolling: false,
             settings,
             editing: false,
             drag: None,
@@ -58,7 +60,8 @@ impl Mobile {
         self.pad = PadState::default();
         self.keys = PadState::default();
         self.device = None;
-        self.menu_finger = None;
+        self.menu_touch.clear();
+        self.menu_scrolling = false;
         self.drag = None;
     }
     pub(super) fn state(&self, size: Option<PhysicalSize<u32>>) -> PadState {
@@ -145,7 +148,9 @@ impl Game<'_> {
         }
         self.mobile.using_pad = false;
         self.last_input = std::time::Instant::now();
-        let playing = self.title.is_none() && self.screen == Screen::Playing;
+        let playing = self.title.is_none()
+            && self.screen == Screen::Playing
+            && !(self.remote.is_some() && self.player.is_none());
         if playing {
             let size = self.window.as_ref().unwrap().inner_size();
             let point = [
@@ -222,39 +227,38 @@ impl Game<'_> {
             }
         } else {
             self.mobile.touch.clear();
-            if touch.phase == TouchPhase::Started && self.mobile.menu_finger.is_none() {
-                self.mobile.menu_finger = Some(touch.id);
-            }
-            if self.mobile.menu_finger == Some(touch.id) {
-                self.window_event(
-                    event_loop,
-                    id,
-                    WindowEvent::CursorMoved {
-                        device_id: touch.device_id,
-                        position: touch.location,
-                    },
+            let size = self.window.as_ref().unwrap().inner_size();
+            let scale = f64::from(HudBatch::new([size.width, size.height]).scale);
+            use horizon_client::mobile_menu_touch::Mode;
+            let mode = if self.screen == Screen::Creative {
+                Mode::ScrollAndDrag
+            } else if self.title.is_some()
+                || matches!(
+                    self.screen,
+                    Screen::Options | Screen::Chat | Screen::Stats | Screen::WorldOptions
+                )
+            {
+                Mode::Scroll
+            } else {
+                Mode::Direct
+            };
+            let actions = self.mobile.menu_touch.update(
+                touch.id,
+                menu_phase(touch.phase),
+                [touch.location.x, touch.location.y],
+                scale,
+                mode,
+                std::time::Instant::now(),
+            );
+            for action in actions {
+                self.mobile.menu_scrolling = matches!(
+                    action,
+                    horizon_client::mobile_menu_touch::Action::Scroll { .. }
                 );
-                if matches!(
-                    touch.phase,
-                    TouchPhase::Started | TouchPhase::Ended | TouchPhase::Cancelled
-                ) {
-                    self.window_event(
-                        event_loop,
-                        id,
-                        WindowEvent::MouseInput {
-                            device_id: touch.device_id,
-                            state: if touch.phase == TouchPhase::Started {
-                                ElementState::Pressed
-                            } else {
-                                ElementState::Released
-                            },
-                            button: MouseButton::Left,
-                        },
-                    );
+                for event in menu_events(action, touch.device_id) {
+                    self.window_event(event_loop, id, event);
                 }
-                if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-                    self.mobile.menu_finger = None;
-                }
+                self.mobile.menu_scrolling = false;
             }
         }
         true
@@ -262,6 +266,7 @@ impl Game<'_> {
     pub(super) fn draw_mobile(&self, batch: &mut HudBatch) {
         if (self.mobile.using_pad && self.mobile.settings.hide_with_controller)
             || self.title.is_some()
+            || (self.remote.is_some() && self.player.is_none())
             || self.screen != Screen::Playing
         {
             return;
@@ -398,4 +403,45 @@ pub(super) fn translate_event(mut event: WindowEvent) -> WindowEvent {
         key.logical_key = Key::Named(NamedKey::Escape);
     }
     event
+}
+
+/// Translate recognizer output through the same menu handlers as mouse input.
+pub(super) fn menu_phase(phase: TouchPhase) -> horizon_client::mobile_menu_touch::Phase {
+    use horizon_client::mobile_menu_touch::Phase;
+    match phase {
+        TouchPhase::Started => Phase::Start,
+        TouchPhase::Moved => Phase::Move,
+        TouchPhase::Ended => Phase::End,
+        TouchPhase::Cancelled => Phase::Cancel,
+    }
+}
+pub(super) fn menu_events(
+    action: horizon_client::mobile_menu_touch::Action,
+    device_id: DeviceId,
+) -> Vec<WindowEvent> {
+    use horizon_client::mobile_menu_touch::Action;
+    let cursor = |p: [f64; 2]| WindowEvent::CursorMoved {
+        device_id,
+        position: winit::dpi::PhysicalPosition::new(p[0], p[1]),
+    };
+    match action {
+        Action::Move(p) => vec![cursor(p)],
+        Action::Press(_) | Action::Release(_) => vec![WindowEvent::MouseInput {
+            device_id,
+            state: if matches!(action, Action::Press(_)) {
+                ElementState::Pressed
+            } else {
+                ElementState::Released
+            },
+            button: MouseButton::Left,
+        }],
+        Action::Scroll { position, lines } => vec![
+            cursor(position),
+            WindowEvent::MouseWheel {
+                device_id,
+                delta: winit::event::MouseScrollDelta::LineDelta(0., lines),
+                phase: TouchPhase::Moved,
+            },
+        ],
+    }
 }
