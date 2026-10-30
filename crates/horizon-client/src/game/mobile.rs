@@ -78,6 +78,10 @@ impl Mobile {
 }
 impl Game<'_> {
     pub(super) fn mobile_poll(&mut self) {
+        if self.pad_in_menu() {
+            self.mobile.touch.clear();
+            self.mobile.drag = None;
+        }
         if self.mobile.checked.elapsed() < std::time::Duration::from_secs(1) {
             return;
         }
@@ -148,10 +152,9 @@ impl Game<'_> {
         }
         self.mobile.using_pad = false;
         self.last_input = std::time::Instant::now();
-        let playing = self.title.is_none()
-            && self.screen == Screen::Playing
-            && !(self.remote.is_some() && self.player.is_none());
+        let playing = !self.pad_in_menu() && !self.mobile_account.open;
         if playing {
+            self.mobile.menu_touch.clear();
             let size = self.window.as_ref().unwrap().inner_size();
             let point = [
                 touch.location.x as f32 / size.width.max(1) as f32,
@@ -265,9 +268,8 @@ impl Game<'_> {
     }
     pub(super) fn draw_mobile(&self, batch: &mut HudBatch) {
         if (self.mobile.using_pad && self.mobile.settings.hide_with_controller)
-            || self.title.is_some()
-            || (self.remote.is_some() && self.player.is_none())
-            || self.screen != Screen::Playing
+            || self.pad_in_menu()
+            || self.mobile_account.open
         {
             return;
         }

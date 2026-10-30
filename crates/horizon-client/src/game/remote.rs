@@ -2876,21 +2876,24 @@ impl Game<'_> {
             return;
         };
         for (id, uuid) in level {
-            let Some(skin) = skins.get(&uuid) else {
-                continue;
-            };
+            // A busy lobby can evict a downloaded skin from the bounded atlas.
+            // Never leave a model pointing to an alias that no longer exists.
+            let skin = skins
+                .get(&uuid)
+                .cloned()
+                .unwrap_or_else(|| horizon_client::tab_list::default_skin(uuid).to_owned());
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
             {
-                mob.skin = Some(skin.clone());
+                mob.skin = Some(skin);
             }
         }
-        if let Some(skin) = own
-            && let Some(mob) = self.player_model.as_mut()
-        {
-            mob.skin = Some(skin);
+        if let Some(mob) = self.player_model.as_mut() {
+            mob.skin = Some(
+                own.unwrap_or_else(|| horizon_client::tab_list::default_skin(local).to_owned()),
+            );
         }
     }
     /// Puts a downloaded skin in an atlas skin slot: a free one, else the
@@ -2900,7 +2903,7 @@ impl Game<'_> {
         let slot = if self.skin_slots.len() < SKIN_SLOTS {
             self.skin_slots.len()
         } else {
-            let (old, slot) = self.skin_slots.remove(0);
+            let (old, slot, _) = self.skin_slots.remove(0);
             self.gui.atlas.sprites.remove(&old);
             slot
         };
@@ -2919,10 +2922,10 @@ impl Game<'_> {
             y: (rect.v0 * h).round() as u32,
             width: 64,
             height: 64,
-            rgba,
+            rgba: rgba.clone(),
         });
         self.gui.atlas.sprites.insert(location.clone(), rect);
-        self.skin_slots.push((location, slot));
+        self.skin_slots.push((location, slot, rgba));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
     pub(super) fn show_skin(&mut self, location: &str) -> bool {

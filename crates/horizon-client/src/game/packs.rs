@@ -192,6 +192,14 @@ impl Game<'_> {
         let context = pack.context.clone();
         self.pack = pack;
         self.gui = gui;
+        // Dynamic textures do not belong to the resource pack. Their old GPU
+        // coordinates and aliases cease to exist when the shared atlas changes.
+        self.map_patches.clear();
+        self.maps.reload_textures();
+        self.trim_slots.clear();
+        for (location, _, rgba) in std::mem::take(&mut self.skin_slots) {
+            self.store_skin(location, rgba);
+        }
         horizon_client::ui_theme::reset_atlas();
         // Villager hats come from the pack's texture metadata (shared data, swapped in place).
         *self

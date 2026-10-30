@@ -281,6 +281,15 @@ pub(super) struct Maps {
     slots: Vec<(i32, usize)>,
     missing: std::collections::HashSet<i32>,
 }
+impl Maps {
+    /// A resource reload replaced the atlas; regenerate visible map uploads.
+    pub(super) fn reload_textures(&mut self) {
+        self.slots.clear();
+        for map in self.data.values_mut() {
+            map.texture_dirty = true;
+        }
+    }
+}
 /// `MapColor.getColorFromPackedId` as RGBA bytes (NONE is transparent).
 fn packed_rgba(packed: u8) -> [u8; 4] {
     let id = usize::from(packed >> 2);

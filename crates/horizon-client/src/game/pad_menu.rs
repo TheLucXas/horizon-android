@@ -99,6 +99,11 @@ impl Game<'_> {
             || self.screen != Screen::Playing
             || self.sign_edit.is_some()
             || self.book.is_some()
+            || self.server_packs.prompt.is_some()
+            || self.pending_entry.is_some()
+            || self.world_loader.is_some()
+            || self.pending_save.is_some()
+            || (self.remote.is_some() && self.player.is_none())
     }
 
     pub(super) fn gui_scale(&self) -> Option<HudBatch> {

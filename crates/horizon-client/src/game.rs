@@ -1452,7 +1452,7 @@ struct Game<'a> {
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
-    skin_slots: Vec<(String, usize)>,
+    skin_slots: Vec<(String, usize, Vec<u8>)>,
     /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
     trim_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
@@ -4532,7 +4532,7 @@ impl Game<'_> {
     /// `KeyMapping.releaseAll` when a screen opens and
     /// `restoreToggleStatesOnScreenClosed` when it closes.
     fn track_toggle_screens(&mut self) {
-        let playing = self.screen == Screen::Playing && self.title.is_none();
+        let playing = !self.pad_in_menu();
         if playing == self.was_playing {
             return;
         }
@@ -4624,6 +4624,8 @@ impl Game<'_> {
         }
         if !capture {
             self.stop_mining();
+            #[cfg(target_os = "android")]
+            self.mobile.clear();
         }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;

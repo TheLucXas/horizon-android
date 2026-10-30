@@ -293,6 +293,7 @@ pub(crate) fn android_native_library_dir() -> Result<std::path::PathBuf, String>
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
+    ANDROID_APP.with(|a| *a.borrow_mut() = Some(app.clone()));
     let result = (|| -> horizon_client::Result<()> {
         let home = app
             .external_data_path()
@@ -307,7 +308,6 @@ fn android_main(app: AndroidApp) {
                 "renderDistance:6\nsimulationDistance:5\nmaxFps:60\nenableVsync:true\ngraphicsMode:0\n",
             )?;
         }
-        ANDROID_APP.with(|a| *a.borrow_mut() = Some(app));
         if let Err(error) = initialize_server_dns() {
             log::warn!("Android DNS bridge: {error}");
         }
@@ -319,7 +319,15 @@ fn android_main(app: AndroidApp) {
     if let Err(error) = result {
         log::error!("Horizon Android: {error}");
     }
+    // The native engine and winit own process-wide single-use state (including
+    // EVENT_LOOP_CREATED). Android otherwise keeps this exited process alive
+    // and the next Activity fails with EventLoop::RecreationAttempt. Finish only
+    // after run() has finished its save/cleanup path and dropped the game.
+    if let Err(error) = android_finish() {
+        log::warn!("Could not finish Android task: {error}");
+    }
     horizon_client::logging::flush();
+    std::process::exit(0);
 }
 
 /// Android does not send a final axis/button release on every Bluetooth disconnect.

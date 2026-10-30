@@ -12,8 +12,9 @@ worlds and options stay in their existing app-data folder. Do not clear player d
       precedence. All sign-in text uses Spanish, English or Portuguese consistently;
       other languages fall back to English for this original bootstrap panel.
 - [ ] First-run text, accented letters and button borders are crisp at native resolution.
-- [ ] A saved session is revalidated online at startup. Failed verification blocks gameplay.
-- [ ] After Mojang approves the Client ID, completing Microsoft's browser flow returns to
+- [ ] A recently verified, unexpired saved session starts from its private cache (up to one hour);
+      expired/older sessions require online verification. Failed verification blocks gameplay.
+- [ ] Completing Microsoft's browser flow with the approved Client ID returns to
       Horizon and verifies both Java entitlements and the matching official profile.
 - [ ] A non-owning account cannot download/install game resources or enter worlds/servers.
 - [ ] First-run setup downloads the game inputs and OpenJDK separately. Network interruption
@@ -22,7 +23,7 @@ worlds and options stay in their existing app-data folder. Do not clear player d
       cancellation/expiry does not leave Java exporters running independently.
 - [ ] Completed setup opens the title and retains worlds, options and touch layout.
 - [ ] Real username, UUID and classic/slim skin are correct; an online-mode server accepts
-      the session. These checks remain blocked until application approval.
+      the session. Sign-in and joining servers have been observed by the tester; recheck on each release.
 - [ ] Text fields open the keyboard, Back hides it and tapping the field reopens it.
 - [ ] Multi-touch move/look/actions work together; touch layout changes persist.
 - [ ] An active controller hides the touch HUD; touching the screen restores it. Unplugging
@@ -31,3 +32,21 @@ worlds and options stay in their existing app-data folder. Do not clear player d
 The APK/version/signature checks, account regression tests, download/extraction tests and
 isolated Java preparation checks are separate automated/development validation. They do not
 prove real Microsoft sign-in or premium-server compatibility before those manual checks pass.
+
+## 0.5.6 modal input, skins and reopening
+
+- [ ] On Hypixel, tap the server-opened book's Done button and page/link buttons.
+      Movement controls must disappear while the book is open and return after closing it.
+- [ ] On CubeCraft, answer the required resource-pack prompt using touch. Proceed downloads
+      and applies the pack; Disconnect leaves the server. Neither button moves the character.
+- [ ] Test pause/options, signs, chat, inventories, creative tabs and server containers.
+      Lists scroll with a swipe; dragging inventory items and sliders still works.
+- [ ] In a populated lobby, inspect nearby players and the inventory avatar before and after
+      applying/removing a resource pack. An unavailable/evicted custom skin falls back to a
+      default skin rather than an invisible model. Intentional server invisibility is unchanged.
+- [ ] Quit using Back/the menu, then reopen from the launcher three times without removing
+      the task manually. Worlds, session, installed files and settings must remain intact.
+
+The client already decodes Java resource packs directly. These fixes do not establish support
+for every pack feature or replace testing the actual server pack. Do not report a pack as
+successfully applied merely because its confirmation buttons respond.
