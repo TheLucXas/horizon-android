@@ -185,7 +185,17 @@ pub struct Connection {
     pub reader: ConnReader,
     pub writer: ConnWriter,
 }
+/// A socket/pipe interrupt that is independent of packet encryption and UI ownership.
+pub struct Interrupt(Stream);
+impl Interrupt {
+    pub fn shutdown(&self) {
+        self.0.shutdown();
+    }
+}
 impl Connection {
+    pub fn interrupt_handle(&self) -> Result<Interrupt> {
+        Ok(Interrupt(self.reader.stream.try_clone()?))
+    }
     pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<Self> {
         let addrs: Vec<_> = (host, port)
             .to_socket_addrs()
@@ -328,6 +338,19 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
+    #[test]
+    fn interrupt_wakes_a_blocked_connection_without_waiting_for_the_peer() {
+        let (client, _peer) = Pipe::pair();
+        let mut connection = Connection::local(client);
+        let interrupt = connection.interrupt_handle().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(connection.recv().is_err()).unwrap();
+        });
+        interrupt.shutdown();
+        assert!(receive.recv_timeout(Duration::from_secs(1)).unwrap());
+        worker.join().unwrap();
+    }
     #[test]
     fn loopback_with_compression_and_encryption() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

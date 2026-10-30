@@ -38,7 +38,7 @@ subprocess.run([str(tools/'aapt2'), 'link', '-I', str(platform), '--manifest', s
 with tempfile.TemporaryDirectory(prefix='horizon-service-') as temporary:
     classes = Path(temporary)
     subprocess.run(['javac', '-source', '8', '-target', '8', '-classpath', str(platform),
-                    '-d', str(classes), str(ROOT/'packaging/android/java/dev/horizon/android/InstallationService.java')], check=True)
+                    '-d', str(classes), *map(str, (ROOT/'packaging/android/java').rglob('*.java'))], check=True)
     subprocess.run(['java', '-cp', str(sdk/'build-tools/35.0.0/lib/d8.jar'),
                     'com.android.tools.r8.D8', '--min-api', '28', '--lib', str(platform),
                     '--output', str(classes), *map(str, classes.rglob('*.class'))], check=True)

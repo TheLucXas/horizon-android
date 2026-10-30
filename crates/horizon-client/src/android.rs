@@ -13,6 +13,79 @@ pub(crate) fn android_app() -> AndroidApp {
     ANDROID_APP.with(|app| app.borrow().clone().expect("Android entry point"))
 }
 
+#[cfg(target_os = "android")]
+static SERVER_DNS: std::sync::OnceLock<(
+    jni::JavaVM,
+    jni::objects::GlobalRef,
+    jni::objects::GlobalRef,
+)> = std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+fn initialize_server_dns() -> Result<(), String> {
+    use jni::objects::{JObject, JValue};
+    let app = android_app();
+    // SAFETY: AndroidApp owns the live VM and Activity.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.map_err(|e| e.to_string())?;
+    let (context, class) = {
+        let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+        let result = env.with_local_frame(12, |env| -> jni::errors::Result<_> {
+            let context = env
+                .call_method(
+                    &activity,
+                    "getApplicationContext",
+                    "()Landroid/content/Context;",
+                    &[],
+                )?
+                .l()?;
+            let loader = env
+                .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
+                .l()?;
+            let name = JObject::from(env.new_string("dev.horizon.android.ServerDns")?);
+            let class = env
+                .call_method(
+                    loader,
+                    "loadClass",
+                    "(Ljava/lang/String;)Ljava/lang/Class;",
+                    &[JValue::Object(&name)],
+                )?
+                .l()?;
+            Ok((env.new_global_ref(context)?, env.new_global_ref(class)?))
+        });
+        if result.is_err() {
+            let _ = env.exception_clear();
+        }
+        result.map_err(|e| e.to_string())?
+    };
+    let _ = SERVER_DNS.set((vm, context, class));
+    horizon_protocol::set_android_dns_resolver(|name| {
+        let (vm, context, class) = SERVER_DNS.get()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let result = env.with_local_frame(8, |env| -> jni::errors::Result<Option<Vec<u8>>> {
+            let name = JObject::from(env.new_string(name)?);
+            let class = <&jni::objects::JClass>::from(class.as_obj());
+            let result = env
+                .call_static_method(
+                    class,
+                    "query",
+                    "(Landroid/content/Context;Ljava/lang/String;)[B",
+                    &[JValue::Object(context.as_obj()), JValue::Object(&name)],
+                )?
+                .l()?;
+            if result.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(env.convert_byte_array(
+                jni::objects::JByteArray::from(result),
+            )?))
+        });
+        if result.is_err() {
+            let _ = env.exception_clear();
+        }
+        result.ok().flatten()
+    });
+    Ok(())
+}
+
 /// Finish the startup task instead of reopening the mandatory account panel.
 #[cfg(target_os = "android")]
 pub(crate) fn android_finish() -> Result<(), String> {
@@ -235,6 +308,9 @@ fn android_main(app: AndroidApp) {
             )?;
         }
         ANDROID_APP.with(|a| *a.borrow_mut() = Some(app));
+        if let Err(error) = initialize_server_dns() {
+            log::warn!("Android DNS bridge: {error}");
+        }
         initialize_language(&home)?;
         horizon_client::logging::init(&home, "Render thread");
         horizon_client::crash::install(home.clone(), "client");

@@ -13,6 +13,7 @@ ORIGINAL_JAVA_SOURCES = {
     "tools/JfrSummary.java", "tests/java/JfrFixture.java",
     # Original Android OS bridges (not recovered/decompiled game code).
     "packaging/android/java/dev/horizon/android/InstallationService.java",
+    "packaging/android/java/dev/horizon/android/ServerDns.java",
     "tools/android/java-fixture/java/dev/horizon/javaprobe/PreparationService.java",
 }
 

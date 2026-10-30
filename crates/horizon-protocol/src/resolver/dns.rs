@@ -83,6 +83,16 @@ pub(super) fn query_srv(
     None
 }
 
+/// The Android OS correlates this reply to the submitted query and handles DNS transport.
+#[cfg(any(target_os = "android", test))]
+pub(super) fn android_reply(bytes: &[u8]) -> Option<(String, u16)> {
+    let id = u16::from_be_bytes(bytes.get(..2)?.try_into().ok()?);
+    match parse_reply(id, bytes) {
+        Reply::Answer(answer) => answer,
+        _ => None,
+    }
+}
+
 fn ask_udp(server: SocketAddr, query: &[u8], timeout: Duration) -> Option<Vec<u8>> {
     let local: SocketAddr = if server.is_ipv4() {
         ([0, 0, 0, 0], 0).into()
@@ -243,6 +253,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn android_os_replies_redirect_the_public_root_domains() {
+        for (hex, host) in [
+            (
+                "4aff818000010001000000000a5f6d696e656372616674045f746370076879706978656c036e65740000210001c00c002100010000012c00160001000163dd026d63076879706978656c036e657400",
+                "mc.hypixel.net.",
+            ),
+            (
+                "d29b818000010001000000000a5f6d696e656372616674045f74637009637562656372616674036e65740000210001c00c002100010000007f001a0000000063dd04706c617909637562656372616674036e657400",
+                "play.cubecraft.net.",
+            ),
+        ] {
+            let bytes: Vec<_> = hex
+                .as_bytes()
+                .chunks(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            assert_eq!(android_reply(&bytes), Some((host.into(), 25565)));
+        }
+        assert!(android_reply(&[]).is_none());
+    }
     #[test]
     fn query_is_a_recursive_srv_question() {
         let query = encode_query(0x1234, NAME).unwrap();

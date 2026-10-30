@@ -4974,6 +4974,64 @@ impl Game<'_> {
         self.send(S::ClientCommand(play::ClientCommand { action: 0 }));
     }
 
+    pub(super) fn remote_connecting_event(
+        &mut self,
+        event: &winit::event::WindowEvent,
+    ) -> Result<bool> {
+        use winit::{
+            event::{ElementState, MouseButton, WindowEvent},
+            keyboard::{KeyCode, PhysicalKey},
+        };
+        if self.remote.is_none() || self.player.is_some() || self.server_packs.prompt.is_some() {
+            return Ok(false);
+        }
+        let size = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size())
+            .unwrap_or_default();
+        let batch = HudBatch::new([size.width, size.height]);
+        let mut cancel = false;
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (
+                    position.x as f32 / batch.scale,
+                    position.y as f32 / batch.scale,
+                );
+                return Ok(true);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                cancel = horizon_client::ui::hovered(
+                    self.cursor,
+                    batch.width / 2. - 75.,
+                    batch.height / 2. + 28.,
+                    150.,
+                    20.,
+                );
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && event.physical_key == PhysicalKey::Code(KeyCode::Escape) =>
+            {
+                cancel = true;
+            }
+            _ => (),
+        }
+        if cancel {
+            self.leave_server(None)?;
+            return Ok(true);
+        }
+        Ok(matches!(
+            event,
+            WindowEvent::MouseInput { .. }
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::MouseWheel { .. }
+        ))
+    }
     /// Connecting / loading screens; true when it covered the frame.
     pub(super) fn remote_overlay(&self, batch: &mut HudBatch) -> bool {
         let Some(r) = &self.remote else { return false };
@@ -4999,6 +5057,17 @@ impl Game<'_> {
                 true,
             );
         }
+        horizon_client::ui::button(
+            batch,
+            atlas,
+            w / 2. - 75.,
+            h / 2. + 28.,
+            150.,
+            20.,
+            &horizon_client::text::Text::translate("gui.cancel", &[]),
+            true,
+            horizon_client::ui::hovered(self.cursor, w / 2. - 75., h / 2. + 28., 150., 20.),
+        );
         let _ = r.joined;
         true
     }

@@ -10877,6 +10877,15 @@ impl ApplicationHandler for Game<'_> {
             self.mobile_sync_ime(ime_retap);
             return;
         }
+        match self.remote_connecting_event(&event) {
+            Ok(true) => return,
+            Ok(false) => (),
+            Err(error) => {
+                self.error = Some(error);
+                event_loop.exit();
+                return;
+            }
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {

@@ -59,3 +59,9 @@ impl From<std::io::Error> for Error {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Install the embedding Android application's OS DNS bridge before connecting to servers.
+#[cfg(target_os = "android")]
+pub fn set_android_dns_resolver(query: fn(&str) -> Option<Vec<u8>>) {
+    resolver::android_dns(query);
+}

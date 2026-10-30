@@ -6,6 +6,12 @@ use crate::{Error, Result};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 mod dns;
+#[cfg(target_os = "android")]
+static ANDROID_DNS: std::sync::OnceLock<fn(&str) -> Option<Vec<u8>>> = std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+pub(crate) fn android_dns(query: fn(&str) -> Option<Vec<u8>>) {
+    let _ = ANDROID_DNS.set(query);
+}
 
 pub(crate) fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
     resolve_with(host, port, srv_redirect, |host, port| {
@@ -38,6 +44,10 @@ fn resolve_with(
 }
 
 fn srv_redirect(name: &str) -> Option<(String, u16)> {
+    #[cfg(target_os = "android")]
+    if let Some(query) = ANDROID_DNS.get() {
+        return query(name).and_then(|reply| dns::android_reply(&reply));
+    }
     dns::query_srv(name, &dns::system_name_servers(), dns::SERVER_TIMEOUT)
 }
 

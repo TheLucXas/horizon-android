@@ -27,8 +27,9 @@ key, not a publisher's release identity. The APK contains no Mojang resources.
 The Android startup uses only original geometric widgets and the bundled OFL-licensed
 Pixelify Sans bitmap font until the account has been verified. Microsoft sign-in, Java Edition
 entitlements and the matching official profile are mandatory before downloading
-Minecraft inputs or entering any local world or server. Cached accounts are checked
-online on startup; failed verification does not fall back to a guest identity.
+Minecraft inputs or entering any local world or server. A private successful ownership/profile check can be reused for up to one hour while
+the Minecraft token still has at least five minutes left. Older or expired proofs are
+checked online; failed verification does not fall back to a guest identity.
 This policy is specific to this Android port. Desktop behavior is unchanged.
 
 The installer downloads the pinned 26.3 version JSON, client/server JARs, portable
@@ -146,3 +147,34 @@ stop it; verified files remain available for retry. No battery-optimization exem
 Manual checks: start downloading, switch apps for a minute, return and confirm progress;
 repeat with the display off. The installation notification should disappear when work ends.
 Also retry after a connection outage and confirm that verified objects are reused.
+
+### Touch menus and connection diagnostics (0.5.5)
+
+Menus now distinguish a tap from a vertical swipe. Options, world/server lists,
+statistics, chat and the creative list accept finger scrolling, scaled in GUI units
+independently of mouse wheel sensitivity/discrete scrolling. Horizontal drags adjust
+sliders. Creative inventory supports holding for 350 ms before dragging an item;
+normal inventory keeps immediate dragging. A cancelled swipe never activates a button.
+Graphics settings retain Minecraft widgets with a darker Android panel and clearer labels.
+
+TCP multiplayer now has a 30-second read timeout instead of waiting indefinitely for
+an unresponsive peer. Login errors identify the packet and connection phase; progress
+is logged locally. Android now queries SRV through the active network's OS resolver (including Private DNS),
+instead of relying on the unavailable `/etc/resolv.conf`. Android 9 uses only the active
+network's configured DNS servers. This resolves the `hypixel.net` and `cubecraft.net`
+redirects used by saved entries. The connection overlay has a localized Cancel button;
+touch gameplay controls are hidden until the player enters the world. Cancellation
+interrupts the socket without joining a DNS/connect worker on the UI thread.
+Public status and initial login probes succeeded, and the OS DNS bridge was exercised
+separately on-device; this is not an authenticated join or proof of play-state compatibility.
+
+Horizon code mods are sandboxed `.hmod` WebAssembly components built for its own API.
+Java Fabric/Forge/NeoForge executables cannot run directly. This APK's manual build
+currently leaves the optional `mods` runtime feature disabled. See [mods](../../docs/mods.md).
+
+Completed installations have a private inventory marker tied to the preparation sources,
+runtime pin and resource schema. Subsequent starts compare paths, sizes and modification
+times and skip downloads, OpenJDK setup and exporters when unchanged. Missing/modified
+files or changed preparation sources require verification again. The first launch after
+upgrading an older installation establishes this marker after one successful preparation.
+Authentication remains required before using either the cached or full installation path.

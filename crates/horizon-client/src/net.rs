@@ -69,6 +69,8 @@ pub struct Session {
     pub counters: Arc<Mutex<Option<Arc<Counters>>>>,
     /// HORIZON_NET_DEBUG=1 logs every packet sent from the game thread.
     debug: bool,
+    cancelled: Arc<AtomicBool>,
+    interrupt: Arc<Mutex<Option<horizon_protocol::connection::Interrupt>>>,
 }
 impl Session {
     /// Start connecting in the background, as `auth`'s account when there is one.
@@ -98,6 +100,9 @@ impl Session {
         lang: Arc<Language>,
         local: Option<horizon_protocol::connection::Pipe>,
     ) -> Self {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let interrupt = Arc::new(Mutex::new(None));
+        let (thread_cancelled, thread_interrupt) = (cancelled.clone(), interrupt.clone());
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
         let configuring = Arc::new(AtomicBool::new(true));
@@ -119,6 +124,8 @@ impl Session {
                     &thread_writer,
                     &thread_configuring,
                     &thread_counters,
+                    &thread_cancelled,
+                    &thread_interrupt,
                 );
                 let from_server = result.is_ok();
                 let reason = result.unwrap_or_else(|e| e);
@@ -141,6 +148,8 @@ impl Session {
             name: name.to_owned(),
             counters,
             debug,
+            cancelled,
+            interrupt,
         }
     }
     /// Everything received since the last poll.
@@ -190,11 +199,19 @@ impl Session {
         }
     }
     pub fn disconnect(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        if let Some(interrupt) = self.interrupt.lock().unwrap().take() {
+            interrupt.shutdown();
+        }
         if let Some(w) = self.writer.lock().unwrap().take() {
             w.shutdown();
         }
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            if t.is_finished() {
+                let _ = t.join();
+            }
+            // DNS/connect may still be bounded by the OS. Its owned worker observes cancellation
+            // before logging in; never block the Android UI while waiting for it.
         }
     }
 }
@@ -267,6 +284,7 @@ fn join_friend(code: &str, send: &Sender<Event>) -> Result<(String, u16), String
 }
 
 fn status(send: &Sender<Event>, text: &str) {
+    log::info!("Horizon multiplayer: {text}");
     let _ = send.send(Event::Status(text.to_owned()));
 }
 
@@ -291,6 +309,8 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     configuring: &AtomicBool,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
+    cancelled: &AtomicBool,
+    interrupt: &Mutex<Option<horizon_protocol::connection::Interrupt>>,
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
@@ -314,6 +334,20 @@ fn run(
         .map_err(|e| e.to_string())?;
         (host, port, c)
     };
+    {
+        let mut handle = interrupt.lock().unwrap();
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Connection cancelled".into());
+        }
+        *handle = Some(c.interrupt_handle().map_err(|e| e.to_string())?);
+    }
+    // A proxy that stops answering must not leave Android on Connecting forever.
+    // The in-memory integrated server keeps its existing wait semantics.
+    if !c.is_memory() {
+        c.reader
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .map_err(|e| e.to_string())?;
+    }
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
     let e = |e: horizon_protocol::Error| e.to_string();
     c.send(
@@ -337,8 +371,13 @@ fn run(
     )
     .map_err(e)?;
     let profile = loop {
-        let (id, payload) = c.recv().map_err(e)?;
-        match login::Clientbound::decode(id, &payload).map_err(e)? {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Connection cancelled".into());
+        }
+        let (id, payload) = c.recv().map_err(|error| format!("Login: {error}"))?;
+        match login::Clientbound::decode(id, &payload)
+            .map_err(|error| format!("Login packet 0x{id:02x}: {error}"))?
+        {
             login::Clientbound::Compression(p) => c.set_compression(p.threshold),
             login::Clientbound::LoginFinished(p) => {
                 c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
@@ -356,6 +395,9 @@ fn run(
                 let key = RsaPublicKey::from_der(&hello.public_key)
                     .map_err(|err| format!("Protocol error: {err}"))?;
                 let secret = generate_secret().map_err(e)?;
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Connection cancelled".into());
+                }
                 if hello.should_authenticate {
                     let account = auth.ok_or_else(|| NOT_SIGNED_IN.to_owned())?;
                     let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
