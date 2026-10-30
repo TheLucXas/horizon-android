@@ -206,3 +206,5 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// Android-friendly menu touch recognition (also tested without a window).
 pub mod mobile_menu_touch;
 
+/// Private completed-installation inventory for the Android startup fast path.
+pub mod android_prepared_cache;

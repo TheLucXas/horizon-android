@@ -213,6 +213,21 @@ pub(super) fn prepare(
     };
     let base = internal.join("installation");
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let prepared_root = base.join("preparation/.local/horizon-client/26.3");
+    let marker = base.join("prepared-complete.json");
+    let mut source = Sha256::new();
+    source.update(horizon_prepare::SOURCES_SHA256);
+    source.update(RUNTIME_HASH);
+    for (name, bytes) in PREPARE_SOURCES {
+        source.update(name.as_bytes());
+        source.update(bytes);
+    }
+    let key = format!("{}:{:x}", horizon_prepare::SCHEMA, source.finalize());
+    if horizon_client::android_prepared_cache::valid(&prepared_root, &marker, &key) {
+        check(cancel)?;
+        log::info!("Horizon: reusing completed Android installation");
+        return Ok(prepared_root);
+    }
     let inputs = official_downloads::download(&base.join("minecraft"), cancel, |p| {
         if !auth::android_verified() {
             cancel.store(true, Ordering::Relaxed);
@@ -250,5 +265,8 @@ pub(super) fn prepare(
         log::debug!("Android sounds: {s}")
     })?;
     check(cancel)?;
+    if let Err(error) = horizon_client::android_prepared_cache::save(&prepared, &marker, &key) {
+        log::warn!("Could not cache completed installation: {error}");
+    }
     Ok(prepared)
 }

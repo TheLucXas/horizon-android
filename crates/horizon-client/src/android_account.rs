@@ -33,8 +33,20 @@ enum Event {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Cached {
     client_id: String,
+    #[serde(default)]
+    verified_at: u64,
     account: Account,
     secrets: Secrets,
+}
+
+impl Cached {
+    fn recent(&self, now: u64) -> bool {
+        self.verified_at > 0
+            && self.verified_at <= now
+            && now - self.verified_at < 3600
+            && self.secrets.expires_at() > now.saturating_add(300)
+            && self.secrets.verified_session(&self.account).is_ok()
+    }
 }
 
 struct Worker {
@@ -56,6 +68,7 @@ pub struct AccountManager {
     account: Option<Account>,
     verified: Option<(Account, Secrets)>,
     active: Arc<AtomicBool>,
+    restored: bool,
 }
 
 impl AccountManager {
@@ -98,11 +111,20 @@ impl AccountManager {
             account: None,
             verified: None,
             active: Arc::new(AtomicBool::new(true)),
+            restored: false,
         };
         if let Some(id) = this.client_id.clone() {
             match this.read_cached() {
                 Ok(Some(cached)) if cached.client_id == id => {
-                    this.spawn(Some((cached.account, cached.secrets)));
+                    let now = unix_now();
+                    if cached.recent(now) {
+                        this.account = Some(cached.account.clone());
+                        this.state = State::SignedIn(cached.account.clone());
+                        this.verified = Some((cached.account, cached.secrets));
+                        this.restored = true;
+                    } else {
+                        this.spawn(Some((cached.account, cached.secrets)));
+                    }
                 }
                 Ok(_) => {}
                 Err(error) => this.state = State::Error(error),
@@ -128,6 +150,7 @@ impl AccountManager {
     }
 
     fn revoke(&mut self) {
+        self.restored = false;
         self.verified = None;
         self.account = None;
         crate::auth::clear_current();
@@ -216,6 +239,12 @@ impl AccountManager {
     /// auth::set_current. The profile in State::SignedIn carries the official skin/cape URLs.
     /// Persistence failures are shown but still permit this session in memory.
     pub fn tick(&mut self) -> Option<crate::auth::AuthSession> {
+        if std::mem::take(&mut self.restored) {
+            return self
+                .verified
+                .as_ref()
+                .and_then(|(account, secrets)| secrets.verified_session(account).ok());
+        }
         if self.worker.is_none()
             && self.active.load(Ordering::Relaxed)
             && let Some((account, secrets)) = &self.verified
@@ -250,6 +279,7 @@ impl AccountManager {
                             self.verified = Some((account.clone(), secrets.clone()));
                             let cached = Cached {
                                 client_id: self.client_id.clone().unwrap_or_default(),
+                                verified_at: unix_now(),
                                 account: account.clone(),
                                 secrets,
                             };
@@ -411,6 +441,41 @@ mod tests {
             events,
         });
         sender.send(Event::Done(result)).unwrap();
+    }
+    #[test]
+    fn verified_cache_is_bounded_by_age_and_token_expiry() {
+        let (account, secrets) = verified_result(20_000);
+        let mut cached = Cached {
+            client_id: "test".into(),
+            verified_at: 10_000,
+            account,
+            secrets,
+        };
+        assert!(cached.recent(10_100));
+        assert!(!cached.recent(9_999));
+        assert!(!cached.recent(13_600));
+        cached.verified_at = 19_900;
+        assert!(!cached.recent(19_900));
+        cached.verified_at = 0;
+        assert!(!cached.recent(1));
+    }
+    #[test]
+    fn recently_verified_private_session_restores_without_a_network_worker() {
+        let root = directory();
+        let mut manager = AccountManager::new(&root).unwrap();
+        manager
+            .configure("3908277c-d619-4fc3-bc07-0c72b38ae12e")
+            .unwrap();
+        completed_worker(&mut manager, Ok(verified_result(unix_now() + 7200)));
+        assert!(manager.tick().is_some());
+        drop(manager);
+        let mut restored = AccountManager::new(&root).unwrap();
+        assert!(!restored.busy());
+        assert!(restored.verified());
+        assert!(restored.tick().unwrap().java_verified());
+        restored.sign_out().unwrap();
+        assert!(!restored.verified());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn gameplay_gate_requires_live_verified_result_and_revokes_on_failure() {
